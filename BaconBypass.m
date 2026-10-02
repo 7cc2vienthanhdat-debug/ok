@@ -9,7 +9,6 @@
 @implementation PassthroughWindow
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hitView = [super hitTest:point withEvent:event];
-    // Nếu điểm chạm rơi vào vùng trống của Window/RootView thì bỏ qua để game nhận cảm ứng
     if (hitView == self || hitView == self.rootViewController.view) {
         return nil;
     }
@@ -29,12 +28,13 @@
 static PassthroughWindow *overlayWindow = nil;
 static UIView *menuContainer = nil;
 static UITextField *apiKeyInput = nil;
+static UIView *keyActionContainer = nil;
 static UITextField *linkInput = nil;
 static UILabel *resultDisplay = nil;
 static UIButton *floatingCircleBtn = nil;
 static NSString *extractedLink = @"";
 
-#define DEFAULT_API_KEY @"Bacon-440724857a7206c7a2d2-6bcdc55374f77bd35806"
+#define DEFAULT_API_KEY @"Bacon-68e61ca9d455d316a50c-b4328879cadc0a77f8a5"
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 
 + (void)load {
@@ -48,18 +48,19 @@ static NSString *extractedLink = @"";
     }];
 }
 
++ (UIWindowScene *)findActiveScene {
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
+            return (UIWindowScene *)scene;
+        }
+    }
+    return nil;
+}
+
 + (void)initFloatingOverlay {
     if (overlayWindow) return;
 
-    UIWindowScene *activeScene = nil;
-    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
-            activeScene = (UIWindowScene *)scene;
-            break;
-        }
-    }
-
-    // Khởi tạo Window xuyên cảm ứng
+    UIWindowScene *activeScene = [self findActiveScene];
     if (activeScene) {
         overlayWindow = [[PassthroughWindow alloc] initWithWindowScene:activeScene];
     } else {
@@ -74,7 +75,7 @@ static NSString *extractedLink = @"";
     overlayWindow.hidden = NO;
 
     // ==========================================
-    // 1. NÚT TRÒN THU NHỎ
+    // 1. NÚT TRÒN THU NHỎ (42x42)
     // ==========================================
     floatingCircleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     floatingCircleBtn.frame = CGRectMake(25, 120, 42, 42);
@@ -95,11 +96,11 @@ static NSString *extractedLink = @"";
     [rootVC.view addSubview:floatingCircleBtn];
 
     // ==========================================
-    // 2. BẢNG MENU CHI TIẾT
+    // 2. BẢNG MENU CHÍNH
     // ==========================================
     CGFloat menuWidth = 310.0;
-    CGFloat menuHeight = 265.0;
-    menuContainer = [[UIView alloc] initWithFrame:CGRectMake((rootVC.view.bounds.size.width - menuWidth) / 2, 120, menuWidth, menuHeight)];
+    CGFloat menuHeight = 300.0;
+    menuContainer = [[UIView alloc] initWithFrame:CGRectMake((rootVC.view.bounds.size.width - menuWidth) / 2, 100, menuWidth, menuHeight)];
     menuContainer.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.10 alpha:0.96];
     menuContainer.layer.cornerRadius = 12.0;
     menuContainer.layer.borderWidth = 1.0;
@@ -149,7 +150,7 @@ static NSString *extractedLink = @"";
         savedKey = DEFAULT_API_KEY;
     }
 
-    apiKeyInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 46, menuWidth - 24, 30)];
+    apiKeyInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 44, menuWidth - 24, 28)];
     apiKeyInput.text = savedKey;
     apiKeyInput.placeholder = @"Nhập Bacon API Key...";
     apiKeyInput.backgroundColor = [UIColor colorWithRed:0.13 green:0.13 blue:0.17 alpha:1.0];
@@ -158,14 +159,43 @@ static NSString *extractedLink = @"";
     apiKeyInput.layer.cornerRadius = 6.0;
     apiKeyInput.autocorrectionType = UITextAutocorrectionTypeNo;
     apiKeyInput.autocapitalizationType = UITextAutocapitalizationTypeNone;
-    UIView *padKey = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 8, 30)];
+    apiKeyInput.clearButtonMode = UITextFieldViewModeWhileEditing;
+    UIView *padKey = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 8, 28)];
     apiKeyInput.leftView = padKey;
     apiKeyInput.leftViewMode = UITextFieldViewModeAlways;
-    [apiKeyInput addTarget:self action:@selector(saveKeyLocally) forControlEvents:UIControlEventEditingDidEnd];
+    [apiKeyInput addTarget:self action:@selector(onApiKeyEditingChanged) forControlEvents:UIControlEventEditingChanged];
+    [apiKeyInput addTarget:self action:@selector(onApiKeyEditingBegan) forControlEvents:UIControlEventEditingDidBegin];
     [menuContainer addSubview:apiKeyInput];
 
-    // Ô nhập Link
-    linkInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 84, menuWidth - 24, 32)];
+    // KHUNG NÚT XÁC NHẬN: [LƯU] HOẶC [KHÔNG LƯU] API KEY
+    keyActionContainer = [[UIView alloc] initWithFrame:CGRectMake(12, 75, menuWidth - 24, 26)];
+    keyActionContainer.backgroundColor = [UIColor clearColor];
+    keyActionContainer.hidden = YES; // Mặc định ẩn, chỉ hiện khi người dùng chỉnh sửa key
+
+    UIButton *saveKeyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    saveKeyBtn.frame = CGRectMake(0, 0, (menuWidth - 30) / 2, 26);
+    saveKeyBtn.backgroundColor = [UIColor colorWithRed:0.15 green:0.60 blue:0.30 alpha:1.0];
+    saveKeyBtn.layer.cornerRadius = 5.0;
+    [saveKeyBtn setTitle:@"💾 Lưu API Key" forState:UIControlStateNormal];
+    [saveKeyBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    saveKeyBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+    [saveKeyBtn addTarget:self action:@selector(onConfirmSaveKey) forControlEvents:UIControlEventTouchUpInside];
+    [keyActionContainer addSubview:saveKeyBtn];
+
+    UIButton *discardKeyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    discardKeyBtn.frame = CGRectMake(CGRectGetMaxX(saveKeyBtn.frame) + 6, 0, (menuWidth - 30) / 2, 26);
+    discardKeyBtn.backgroundColor = [UIColor colorWithRed:0.40 green:0.40 blue:0.45 alpha:1.0];
+    discardKeyBtn.layer.cornerRadius = 5.0;
+    [discardKeyBtn setTitle:@"✕ Không lưu" forState:UIControlStateNormal];
+    [discardKeyBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    discardKeyBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+    [discardKeyBtn addTarget:self action:@selector(onDiscardKey) forControlEvents:UIControlEventTouchUpInside];
+    [keyActionContainer addSubview:discardKeyBtn];
+
+    [menuContainer addSubview:keyActionContainer];
+
+    // Ô nhập Link cần bypass
+    linkInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 106, menuWidth - 24, 32)];
     linkInput.placeholder = @"Dán link cần Bypass vào đây...";
     linkInput.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.22 alpha:1.0];
     linkInput.textColor = [UIColor whiteColor];
@@ -173,6 +203,7 @@ static NSString *extractedLink = @"";
     linkInput.layer.cornerRadius = 6.0;
     linkInput.autocorrectionType = UITextAutocorrectionTypeNo;
     linkInput.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    linkInput.clearButtonMode = UITextFieldViewModeWhileEditing;
     UIView *padLink = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 8, 32)];
     linkInput.leftView = padLink;
     linkInput.leftViewMode = UITextFieldViewModeAlways;
@@ -180,7 +211,7 @@ static NSString *extractedLink = @"";
 
     // Nút Bypass
     UIButton *bypassBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    bypassBtn.frame = CGRectMake(12, 124, (menuWidth - 30) / 2, 34);
+    bypassBtn.frame = CGRectMake(12, 144, (menuWidth - 30) / 2, 34);
     bypassBtn.backgroundColor = [UIColor colorWithRed:1.00 green:0.67 blue:0.00 alpha:1.0];
     bypassBtn.layer.cornerRadius = 6.0;
     [bypassBtn setTitle:@"Bypass Ngay" forState:UIControlStateNormal];
@@ -191,7 +222,7 @@ static NSString *extractedLink = @"";
 
     // Nút Sao chép
     UIButton *copyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 6, 124, (menuWidth - 30) / 2, 34);
+    copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 6, 144, (menuWidth - 30) / 2, 34);
     copyBtn.backgroundColor = [UIColor colorWithRed:0.25 green:0.25 blue:0.35 alpha:1.0];
     copyBtn.layer.cornerRadius = 6.0;
     [copyBtn setTitle:@"Sao Chép" forState:UIControlStateNormal];
@@ -201,13 +232,13 @@ static NSString *extractedLink = @"";
     [menuContainer addSubview:copyBtn];
 
     // Hộp kết quả
-    UIView *resultBox = [[UIView alloc] initWithFrame:CGRectMake(12, 166, menuWidth - 24, 88)];
+    UIView *resultBox = [[UIView alloc] initWithFrame:CGRectMake(12, 186, menuWidth - 24, 102)];
     resultBox.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.06 alpha:1.0];
     resultBox.layer.cornerRadius = 6.0;
     [menuContainer addSubview:resultBox];
 
-    resultDisplay = [[UILabel alloc] initWithFrame:CGRectMake(8, 6, menuWidth - 40, 76)];
-    resultDisplay.text = @"Kết quả bypass sẽ hiển thị ở đây...";
+    resultDisplay = [[UILabel alloc] initWithFrame:CGRectMake(8, 6, menuWidth - 40, 90)];
+    resultDisplay.text = @"Dán link rồi ấn Bypass Ngay...";
     resultDisplay.textColor = [UIColor colorWithRed:0.6 green:0.6 blue:0.65 alpha:1.0];
     resultDisplay.font = [UIFont systemFontOfSize:11];
     resultDisplay.numberOfLines = 0;
@@ -229,23 +260,60 @@ static NSString *extractedLink = @"";
     floatingCircleBtn.hidden = NO;
 }
 
-+ (void)saveKeyLocally {
-    NSString *key = [apiKeyInput.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (key.length > 0) {
-        [[NSUserDefaults standardUserDefaults] setObject:key forKey:STORAGE_KEY];
++ (NSString *)cleanString:(NSString *)str {
+    if (!str) return @"";
+    NSString *cleaned = [str stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    cleaned = [cleaned stringByReplacingOccurrencesOfString:@"\"" withString:@""];
+    cleaned = [cleaned stringByReplacingOccurrencesOfString:@"'" withString:@""];
+    return cleaned;
+}
+
+// Bắt sự kiện khi người dùng gõ / dán key mới
++ (void)onApiKeyEditingBegan {
+    keyActionContainer.hidden = NO;
+}
+
++ (void)onApiKeyEditingChanged {
+    keyActionContainer.hidden = NO;
+}
+
+// Hành động khi ấn: [Lưu API Key]
++ (void)onConfirmSaveKey {
+    [apiKeyInput resignFirstResponder];
+    NSString *newKey = [self cleanString:apiKeyInput.text];
+    if (newKey.length > 0) {
+        [[NSUserDefaults standardUserDefaults] setObject:newKey forKey:STORAGE_KEY];
         [[NSUserDefaults standardUserDefaults] synchronize];
+        resultDisplay.text = @"✅ Đã lưu API Key mới vào hệ thống!";
+        resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
     }
+    keyActionContainer.hidden = YES;
+}
+
+// Hành động khi ấn: [Không lưu]
++ (void)onDiscardKey {
+    [apiKeyInput resignFirstResponder];
+    NSString *savedKey = [[NSUserDefaults standardUserDefaults] stringForKey:STORAGE_KEY];
+    if (!savedKey || savedKey.length == 0) {
+        savedKey = DEFAULT_API_KEY;
+    }
+    apiKeyInput.text = savedKey;
+    resultDisplay.text = @"↩️ Đã hủy và khôi phục lại Key trước đó.";
+    resultDisplay.textColor = [UIColor colorWithRed:0.8 green:0.8 blue:0.8 alpha:1.0];
+    keyActionContainer.hidden = YES;
 }
 
 + (void)handleBypass {
     [linkInput resignFirstResponder];
     [apiKeyInput resignFirstResponder];
-    [self saveKeyLocally];
 
-    NSString *key = [apiKeyInput.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (key.length == 0) key = DEFAULT_API_KEY;
+    NSString *key = [self cleanString:apiKeyInput.text];
+    if (key.length == 0) {
+        NSString *savedKey = [[NSUserDefaults standardUserDefaults] stringForKey:STORAGE_KEY];
+        key = (savedKey && savedKey.length > 0) ? savedKey : DEFAULT_API_KEY;
+    }
 
-    NSString *url = [linkInput.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *url = [self cleanString:linkInput.text];
     if (url.length == 0) {
         resultDisplay.text = @"❌ Hãy dán link trước!";
         resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
