@@ -1,25 +1,64 @@
 #import <UIKit/UIKit.h>
+#import <WebKit/WebKit.h>
 
-@interface BaconBypassOverlay : NSObject
+@interface BaconBypassOverlay : NSObject <WKNavigationDelegate>
 + (void)load;
 @end
 
 @implementation BaconBypassOverlay
 
+// --- UI Components ---
+static UIWindow *robloxWindow = nil;
+static UIButton *floatingCircleBtn = nil;
+static UILabel *infoWidgetLabel = nil;
 static UIView *menuContainer = nil;
+static UIView *miniBrowserContainer = nil;
+static WKWebView *miniWebView = nil;
+static UIView *historyContainer = nil;
+static UIScrollView *historyScrollView = nil;
+
+// --- Form Controls ---
 static UITextField *apiKeyInput = nil;
 static UIView *keyActionContainer = nil;
 static UITextField *linkInput = nil;
 static UITextView *resultDisplay = nil;
-static UIButton *floatingCircleBtn = nil;
 static NSString *extractedLink = nil;
-static UIWindow *robloxWindow = nil;
+
+// --- Performance & RGB Engine ---
+static CADisplayLink *renderLoop = nil;
+static CGFloat currentHue = 0.0;
+static NSInteger frameCount = 0;
+static CFTimeInterval lastFpsTime = 0;
+static NSInteger currentFPS = 60;
 
 #define DEFAULT_API_KEY @"Bacon-68e61ca9d455d316a50c-b4328879cadc0a77f8a5"
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
+#define HISTORY_KEY @"BaconBypass_HistoryLinks"
 
+// ============================================================
+// HAPTIC FEEDBACK (RUNG XÚC GIÁC TAPTIC ENGINE)
+// ============================================================
++ (void)triggerImpact:(UIImpactFeedbackStyle)style {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIImpactFeedbackGenerator *generator = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
+        [generator prepare];
+        [generator impactOccurred];
+    });
+}
+
++ (void)triggerNotify:(UINotificationFeedbackType)type {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UINotificationFeedbackGenerator *generator = [[UINotificationFeedbackGenerator alloc] init];
+        [generator prepare];
+        [generator notificationOccurred:type];
+    });
+}
+
+// ============================================================
+// KHỞI CHẠY OVERLAY
+// ============================================================
 + (void)load {
-    // Đợi 3.5 giây để Roblox khởi tạo xong engine đồ họa và vượt qua Splash Screen
+    [UIDevice currentDevice].batteryMonitoringEnabled = YES;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [self tryInjectOverlay];
     });
@@ -30,16 +69,12 @@ static UIWindow *robloxWindow = nil;
         if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
             UIWindowScene *windowScene = (UIWindowScene *)scene;
             for (UIWindow *win in windowScene.windows) {
-                if (win.rootViewController != nil && !win.hidden) {
-                    return win;
-                }
+                if (win.rootViewController != nil && !win.hidden) return win;
             }
         }
     }
     for (UIWindow *win in [UIApplication sharedApplication].windows) {
-        if (win.rootViewController != nil && !win.hidden) {
-            return win;
-        }
+        if (win.rootViewController != nil && !win.hidden) return win;
     }
     return nil;
 }
@@ -49,7 +84,6 @@ static UIWindow *robloxWindow = nil;
 
     robloxWindow = [self findRobloxWindow];
     if (!robloxWindow || !robloxWindow.rootViewController) {
-        // Nếu Roblox chưa nạp xong Window, thử lại sau 1 giây
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [self tryInjectOverlay];
         });
@@ -57,21 +91,71 @@ static UIWindow *robloxWindow = nil;
     }
 
     [self setupViewsInWindow:robloxWindow];
+    [self startDisplayLoop];
 }
 
+// ============================================================
+// VÒNG LẶP RENDER: RGB GLOW & ĐO FPS / PIN / GIỜ
+// ============================================================
++ (void)startDisplayLoop {
+    if (renderLoop) return;
+    renderLoop = [CADisplayLink displayLinkWithTarget:self selector:@selector(onRenderFrame:)];
+    [renderLoop addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+}
+
++ (void)onRenderFrame:(CADisplayLink *)link {
+    // 1. Hiệu ứng viền chuyển màu cầu vồng (RGB Glow)
+    currentHue += 0.006;
+    if (currentHue > 1.0) currentHue = 0.0;
+    UIColor *rainbowColor = [UIColor colorWithHue:currentHue saturation:0.95 brightness:1.0 alpha:1.0];
+    floatingCircleBtn.layer.borderColor = rainbowColor.CGColor;
+
+    // 2. Tính toán FPS thực tế
+    frameCount++;
+    if (lastFpsTime == 0) lastFpsTime = link.timestamp;
+    CFTimeInterval delta = link.timestamp - lastFpsTime;
+
+    if (delta >= 1.0) {
+        currentFPS = (NSInteger)round(frameCount / delta);
+        frameCount = 0;
+        lastFpsTime = link.timestamp;
+        [self updateInfoWidgetText];
+    }
+}
+
++ (void)updateInfoWidgetText {
+    if (!infoWidgetLabel || infoWidgetLabel.hidden) return;
+
+    // Lấy giờ
+    NSDateFormatter *df = [[NSDateFormatter alloc] init];
+    [df setDateFormat:@"HH:mm"];
+    NSString *timeStr = [df stringFromDate:[NSDate date]];
+
+    // Lấy pin
+    float bat = [UIDevice currentDevice].batteryLevel;
+    int batPct = (bat < 0) ? 100 : (int)(bat * 100.0f);
+
+    infoWidgetLabel.text = [NSString stringWithFormat:@"%@ • %d%% • %ld FPS", timeStr, batPct, (long)currentFPS];
+}
+
++ (void)syncWidgetPosition {
+    if (!floatingCircleBtn || !infoWidgetLabel) return;
+    infoWidgetLabel.center = CGPointMake(floatingCircleBtn.center.x, floatingCircleBtn.center.y + 28);
+}
+
+// ============================================================
+// KHỞI TẠO CÁC GIAO DIỆN
+// ============================================================
 + (void)setupViewsInWindow:(UIWindow *)targetWindow {
-    // ==========================================
-    // 1. NÚT TRÒN THU NHỎ (42x42)
-    // ==========================================
+    // 1. Nút tròn nổi RGB (42x42)
     floatingCircleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     floatingCircleBtn.frame = CGRectMake(25, 120, 42, 42);
-    floatingCircleBtn.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.16 alpha:0.85];
+    floatingCircleBtn.backgroundColor = [UIColor colorWithRed:0.10 green:0.10 blue:0.14 alpha:0.92];
     floatingCircleBtn.layer.cornerRadius = 21.0;
-    floatingCircleBtn.layer.borderWidth = 1.5;
-    floatingCircleBtn.layer.borderColor = [UIColor colorWithRed:1.00 green:0.67 blue:0.00 alpha:0.9].CGColor;
+    floatingCircleBtn.layer.borderWidth = 2.0;
     floatingCircleBtn.layer.shadowColor = [UIColor blackColor].CGColor;
-    floatingCircleBtn.layer.shadowOffset = CGSizeMake(0, 2);
-    floatingCircleBtn.layer.shadowOpacity = 0.4;
+    floatingCircleBtn.layer.shadowOffset = CGSizeMake(0, 3);
+    floatingCircleBtn.layer.shadowOpacity = 0.5;
     floatingCircleBtn.layer.shadowRadius = 4.0;
     [floatingCircleBtn setTitle:@"⚡" forState:UIControlStateNormal];
     floatingCircleBtn.titleLabel.font = [UIFont systemFontOfSize:18];
@@ -81,14 +165,24 @@ static UIWindow *robloxWindow = nil;
     [floatingCircleBtn addGestureRecognizer:panBtn];
     [targetWindow addSubview:floatingCircleBtn];
 
-    // ==========================================
-    // 2. BẢNG MENU CHÍNH
-    // ==========================================
-    CGFloat menuWidth = 310.0;
+    // 2. Widget thông tin: Giờ | Pin | FPS
+    infoWidgetLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 110, 16)];
+    infoWidgetLabel.backgroundColor = [UIColor colorWithRed:0.0 green:0.0 blue:0.0 alpha:0.75];
+    infoWidgetLabel.textColor = [UIColor colorWithRed:0.9 green:0.9 blue:0.95 alpha:1.0];
+    infoWidgetLabel.font = [UIFont boldSystemFontOfSize:9];
+    infoWidgetLabel.textAlignment = NSTextAlignmentCenter;
+    infoWidgetLabel.layer.cornerRadius = 8.0;
+    infoWidgetLabel.clipsToBounds = YES;
+    [self syncWidgetPosition];
+    [self updateInfoWidgetText];
+    [targetWindow addSubview:infoWidgetLabel];
+
+    // 3. Khung Menu Chính
+    CGFloat menuWidth = 320.0;
     CGFloat menuHeight = 300.0;
     menuContainer = [[UIView alloc] initWithFrame:CGRectMake((targetWindow.bounds.size.width - menuWidth) / 2, 100, menuWidth, menuHeight)];
-    menuContainer.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.10 alpha:0.96];
-    menuContainer.layer.cornerRadius = 12.0;
+    menuContainer.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.10 alpha:0.97];
+    menuContainer.layer.cornerRadius = 14.0;
     menuContainer.layer.borderWidth = 1.0;
     menuContainer.layer.borderColor = [UIColor colorWithRed:0.25 green:0.25 blue:0.32 alpha:1.0].CGColor;
     menuContainer.clipsToBounds = YES;
@@ -97,20 +191,42 @@ static UIWindow *robloxWindow = nil;
     UIPanGestureRecognizer *panMenu = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragMenu:)];
     [menuContainer addGestureRecognizer:panMenu];
 
-    // Thanh Header
+    // Header Menu
     UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, menuWidth, 38)];
     header.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.16 alpha:1.0];
     [menuContainer addSubview:header];
 
-    UILabel *headerTitle = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, 180, 38)];
-    headerTitle.text = @"⚡ BACON BYPASS";
+    UILabel *headerTitle = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, 120, 38)];
+    headerTitle.text = @"⚡ BACON PRO";
     headerTitle.textColor = [UIColor colorWithRed:1.00 green:0.67 blue:0.00 alpha:1.0];
     headerTitle.font = [UIFont boldSystemFontOfSize:13];
     [header addSubview:headerTitle];
 
+    // Nút mở Web In-App
+    UIButton *webBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    webBtn.frame = CGRectMake(menuWidth - 145, 6, 48, 26);
+    webBtn.backgroundColor = [UIColor colorWithRed:0.20 green:0.40 blue:0.75 alpha:1.0];
+    webBtn.layer.cornerRadius = 6.0;
+    [webBtn setTitle:@"🌐 Web" forState:UIControlStateNormal];
+    [webBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    webBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+    [webBtn addTarget:self action:@selector(toggleMiniBrowser) forControlEvents:UIControlEventTouchUpInside];
+    [header addSubview:webBtn];
+
+    // Nút mở Lịch Sử
+    UIButton *histBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    histBtn.frame = CGRectMake(menuWidth - 92, 6, 32, 26);
+    histBtn.backgroundColor = [UIColor colorWithRed:0.30 green:0.30 blue:0.40 alpha:1.0];
+    histBtn.layer.cornerRadius = 6.0;
+    [histBtn setTitle:@"📜" forState:UIControlStateNormal];
+    [histBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    histBtn.titleLabel.font = [UIFont systemFontOfSize:13];
+    [histBtn addTarget:self action:@selector(toggleHistory) forControlEvents:UIControlEventTouchUpInside];
+    [header addSubview:histBtn];
+
     // Nút Thu nhỏ (−)
     UIButton *minBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    minBtn.frame = CGRectMake(menuWidth - 62, 6, 26, 26);
+    minBtn.frame = CGRectMake(menuWidth - 56, 6, 24, 26);
     minBtn.backgroundColor = [UIColor colorWithRed:0.25 green:0.25 blue:0.35 alpha:1.0];
     minBtn.layer.cornerRadius = 6.0;
     [minBtn setTitle:@"−" forState:UIControlStateNormal];
@@ -121,7 +237,7 @@ static UIWindow *robloxWindow = nil;
 
     // Nút Đóng (✕)
     UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    closeBtn.frame = CGRectMake(menuWidth - 32, 6, 26, 26);
+    closeBtn.frame = CGRectMake(menuWidth - 28, 6, 24, 26);
     closeBtn.backgroundColor = [UIColor colorWithRed:0.80 green:0.20 blue:0.20 alpha:1.0];
     closeBtn.layer.cornerRadius = 6.0;
     [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
@@ -132,9 +248,7 @@ static UIWindow *robloxWindow = nil;
 
     // Ô nhập API Key
     NSString *savedKey = [[NSUserDefaults standardUserDefaults] stringForKey:STORAGE_KEY];
-    if (!savedKey || savedKey.length == 0) {
-        savedKey = DEFAULT_API_KEY;
-    }
+    if (!savedKey || savedKey.length == 0) savedKey = DEFAULT_API_KEY;
 
     apiKeyInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 44, menuWidth - 24, 28)];
     apiKeyInput.text = savedKey;
@@ -153,7 +267,7 @@ static UIWindow *robloxWindow = nil;
     [apiKeyInput addTarget:self action:@selector(onApiKeyEditingBegan) forControlEvents:UIControlEventEditingDidBegin];
     [menuContainer addSubview:apiKeyInput];
 
-    // Nút xác nhận: [Lưu] / [Không lưu] API Key
+    // Khung nút Lưu / Hủy Key
     keyActionContainer = [[UIView alloc] initWithFrame:CGRectMake(12, 75, menuWidth - 24, 26)];
     keyActionContainer.backgroundColor = [UIColor clearColor];
     keyActionContainer.hidden = YES;
@@ -162,7 +276,7 @@ static UIWindow *robloxWindow = nil;
     saveKeyBtn.frame = CGRectMake(0, 0, (menuWidth - 30) / 2, 26);
     saveKeyBtn.backgroundColor = [UIColor colorWithRed:0.15 green:0.60 blue:0.30 alpha:1.0];
     saveKeyBtn.layer.cornerRadius = 5.0;
-    [saveKeyBtn setTitle:@"💾 Lưu API Key" forState:UIControlStateNormal];
+    [saveKeyBtn setTitle:@"💾 Lưu Key" forState:UIControlStateNormal];
     [saveKeyBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     saveKeyBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
     [saveKeyBtn addTarget:self action:@selector(onConfirmSaveKey) forControlEvents:UIControlEventTouchUpInside];
@@ -177,10 +291,9 @@ static UIWindow *robloxWindow = nil;
     discardKeyBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
     [discardKeyBtn addTarget:self action:@selector(onDiscardKey) forControlEvents:UIControlEventTouchUpInside];
     [keyActionContainer addSubview:discardKeyBtn];
-
     [menuContainer addSubview:keyActionContainer];
 
-    // Ô nhập Link cần bypass
+    // Ô nhập link
     linkInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 106, menuWidth - 24, 32)];
     linkInput.placeholder = @"Dán link cần Bypass vào đây...";
     linkInput.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.22 alpha:1.0];
@@ -234,30 +347,237 @@ static UIWindow *robloxWindow = nil;
 
     [targetWindow addSubview:menuContainer];
 
-    // Theo dõi thay đổi trạng thái ứng dụng để luôn đưa nút lên trên cùng
+    // 4. Khởi tạo Trình duyệt Mini In-App (WKWebView)
+    [self setupMiniBrowserInWindow:targetWindow];
+
+    // 5. Khởi tạo Bảng Lịch Sử
+    [self setupHistoryOverlayInWindow:targetWindow];
+
+    // Đưa giao diện lên trước khi game active
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
                                                   usingBlock:^(NSNotification * _Nonnull note) {
         if (robloxWindow) {
             [robloxWindow bringSubviewToFront:floatingCircleBtn];
+            [robloxWindow bringSubviewToFront:infoWidgetLabel];
             [robloxWindow bringSubviewToFront:menuContainer];
         }
     }];
 }
 
+// ============================================================
+// TRÌNH DUYỆT MINI IN-APP
+// ============================================================
++ (void)setupMiniBrowserInWindow:(UIWindow *)window {
+    CGFloat bWidth = MIN(window.bounds.size.width - 30, 360.0);
+    CGFloat bHeight = 440.0;
+    miniBrowserContainer = [[UIView alloc] initWithFrame:CGRectMake((window.bounds.size.width - bWidth)/2, 60, bWidth, bHeight)];
+    miniBrowserContainer.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.98];
+    miniBrowserContainer.layer.cornerRadius = 12.0;
+    miniBrowserContainer.layer.borderWidth = 1.0;
+    miniBrowserContainer.layer.borderColor = [UIColor colorWithRed:0.3 green:0.3 blue:0.4 alpha:1.0].CGColor;
+    miniBrowserContainer.clipsToBounds = YES;
+    miniBrowserContainer.hidden = YES;
+
+    // Header Browser
+    UIView *bHeader = [[UIView alloc] initWithFrame:CGRectMake(0, 0, bWidth, 38)];
+    bHeader.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.18 alpha:1.0];
+    UIPanGestureRecognizer *panWeb = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragBrowser:)];
+    [bHeader addGestureRecognizer:panWeb];
+    [miniBrowserContainer addSubview:bHeader];
+
+    UILabel *bTitle = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, 160, 38)];
+    bTitle.text = @"🌐 Bacon Web Browser";
+    bTitle.textColor = [UIColor whiteColor];
+    bTitle.font = [UIFont boldSystemFontOfSize:12];
+    [bHeader addSubview:bTitle];
+
+    UIButton *reloadBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    reloadBtn.frame = CGRectMake(bWidth - 75, 6, 32, 26);
+    reloadBtn.backgroundColor = [UIColor colorWithRed:0.25 green:0.25 blue:0.35 alpha:1.0];
+    reloadBtn.layer.cornerRadius = 6.0;
+    [reloadBtn setTitle:@"🔄" forState:UIControlStateNormal];
+    [reloadBtn addTarget:self action:@selector(reloadBrowser) forControlEvents:UIControlEventTouchUpInside];
+    [bHeader addSubview:reloadBtn];
+
+    UIButton *closeWebBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    closeWebBtn.frame = CGRectMake(bWidth - 38, 6, 28, 26);
+    closeWebBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
+    closeWebBtn.layer.cornerRadius = 6.0;
+    [closeWebBtn setTitle:@"✕" forState:UIControlStateNormal];
+    [closeWebBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    closeWebBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+    [closeWebBtn addTarget:self action:@selector(toggleMiniBrowser) forControlEvents:UIControlEventTouchUpInside];
+    [bHeader addSubview:closeWebBtn];
+
+    // WKWebView
+    WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
+    miniWebView = [[WKWebView alloc] initWithFrame:CGRectMake(0, 38, bWidth, bHeight - 38) configuration:config];
+    miniWebView.backgroundColor = [UIColor whiteColor];
+    [miniBrowserContainer addSubview:miniWebView];
+
+    [window addSubview:miniBrowserContainer];
+}
+
++ (void)toggleMiniBrowser {
+    [self triggerImpact:UIImpactFeedbackStyleLight];
+    miniBrowserContainer.hidden = !miniBrowserContainer.hidden;
+    if (!miniBrowserContainer.hidden) {
+        [robloxWindow bringSubviewToFront:miniBrowserContainer];
+        if (!miniWebView.URL) {
+            NSURL *url = [NSURL URLWithString:@"https://baconbypass.online"];
+            [miniWebView loadRequest:[NSURLRequest requestWithURL:url]];
+        }
+    }
+}
+
++ (void)reloadBrowser {
+    [self triggerImpact:UIImpactFeedbackStyleLight];
+    [miniWebView reload];
+}
+
+// ============================================================
+// BẢNG LỊCH SỬ LINK (HISTORY LOG)
+// ============================================================
++ (void)setupHistoryOverlayInWindow:(UIWindow *)window {
+    CGFloat hWidth = 310.0;
+    CGFloat hHeight = 240.0;
+    historyContainer = [[UIView alloc] initWithFrame:CGRectMake((window.bounds.size.width - hWidth)/2, 140, hWidth, hHeight)];
+    historyContainer.backgroundColor = [UIColor colorWithRed:0.09 green:0.09 blue:0.12 alpha:0.98];
+    historyContainer.layer.cornerRadius = 12.0;
+    historyContainer.layer.borderWidth = 1.0;
+    historyContainer.layer.borderColor = [UIColor colorWithRed:0.35 green:0.35 blue:0.45 alpha:1.0].CGColor;
+    historyContainer.clipsToBounds = YES;
+    historyContainer.hidden = YES;
+
+    // Header
+    UIView *hHeader = [[UIView alloc] initWithFrame:CGRectMake(0, 0, hWidth, 36)];
+    hHeader.backgroundColor = [UIColor colorWithRed:0.14 green:0.14 blue:0.18 alpha:1.0];
+    [historyContainer addSubview:hHeader];
+
+    UILabel *hTitle = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, 180, 36)];
+    hTitle.text = @"📜 Lịch Sử 5 Link Gần Nhất";
+    hTitle.textColor = [UIColor colorWithRed:1.0 green:0.7 blue:0.2 alpha:1.0];
+    hTitle.font = [UIFont boldSystemFontOfSize:12];
+    [hHeader addSubview:hTitle];
+
+    UIButton *closeHBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    closeHBtn.frame = CGRectMake(hWidth - 34, 5, 26, 26);
+    closeHBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
+    closeHBtn.layer.cornerRadius = 6.0;
+    [closeHBtn setTitle:@"✕" forState:UIControlStateNormal];
+    [closeHBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    closeHBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+    [closeHBtn addTarget:self action:@selector(toggleHistory) forControlEvents:UIControlEventTouchUpInside];
+    [hHeader addSubview:closeHBtn];
+
+    historyScrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 36, hWidth, hHeight - 36)];
+    [historyContainer addSubview:historyScrollView];
+
+    [window addSubview:historyContainer];
+}
+
++ (void)saveLinkToHistory:(NSString *)link {
+    if (!link || link.length == 0) return;
+    NSMutableArray *arr = [[[NSUserDefaults standardUserDefaults] arrayForKey:HISTORY_KEY] mutableCopy] ?: [NSMutableArray array];
+    [arr removeObject:link];
+    [arr insertObject:link atIndex:0];
+    while (arr.count > 5) [arr removeLastObject];
+    [[NSUserDefaults standardUserDefaults] setObject:arr forKey:HISTORY_KEY];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+}
+
++ (void)toggleHistory {
+    [self triggerImpact:UIImpactFeedbackStyleLight];
+    historyContainer.hidden = !historyContainer.hidden;
+    if (!historyContainer.hidden) {
+        [robloxWindow bringSubviewToFront:historyContainer];
+        [self reloadHistoryList];
+    }
+}
+
++ (void)reloadHistoryList {
+    for (UIView *v in historyScrollView.subviews) [v removeFromSuperview];
+
+    NSArray *items = [[NSUserDefaults standardUserDefaults] arrayForKey:HISTORY_KEY] ?: @[];
+    if (items.count == 0) {
+        UILabel *empty = [[UILabel alloc] initWithFrame:CGRectMake(10, 30, historyContainer.bounds.size.width - 20, 30)];
+        empty.text = @"Chưa có link nào trong lịch sử!";
+        empty.textColor = [UIColor grayColor];
+        empty.textAlignment = NSTextAlignmentCenter;
+        empty.font = [UIFont systemFontOfSize:12];
+        [historyScrollView addSubview:empty];
+        return;
+    }
+
+    CGFloat y = 8.0;
+    CGFloat rowWidth = historyContainer.bounds.size.width - 20;
+
+    for (int i = 0; i < items.count; i++) {
+        NSString *linkItem = items[i];
+        UIView *card = [[UIView alloc] initWithFrame:CGRectMake(10, y, rowWidth, 34)];
+        card.backgroundColor = [UIColor colorWithRed:0.14 green:0.14 blue:0.18 alpha:1.0];
+        card.layer.cornerRadius = 6.0;
+
+        UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(8, 0, rowWidth - 60, 34)];
+        lbl.text = [NSString stringWithFormat:@"%d. %@", i + 1, linkItem];
+        lbl.textColor = [UIColor whiteColor];
+        lbl.font = [UIFont systemFontOfSize:10];
+        lbl.lineBreakMode = NSLineBreakByTruncatingMiddle;
+        [card addSubview:lbl];
+
+        UIButton *cBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+        cBtn.frame = CGRectMake(rowWidth - 50, 4, 44, 26);
+        cBtn.backgroundColor = [UIColor colorWithRed:0.25 green:0.55 blue:0.35 alpha:1.0];
+        cBtn.layer.cornerRadius = 4.0;
+        [cBtn setTitle:@"Chép" forState:UIControlStateNormal];
+        [cBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        cBtn.titleLabel.font = [UIFont boldSystemFontOfSize:10];
+        objc_setAssociatedObject(cBtn, "targetLink", linkItem, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [cBtn addTarget:self action:@selector(copyHistoryItem:) forControlEvents:UIControlEventTouchUpInside];
+        [card addSubview:cBtn];
+
+        [historyScrollView addSubview:card];
+        y += 40.0;
+    }
+    historyScrollView.contentSize = CGSizeMake(historyContainer.bounds.size.width, y);
+}
+
++ (void)copyHistoryItem:(UIButton *)sender {
+    NSString *link = objc_getAssociatedObject(sender, "targetLink");
+    if (link && link.length > 0) {
+        [UIPasteboard generalPasteboard].string = link;
+        [self triggerNotify:UINotificationFeedbackTypeSuccess];
+        resultDisplay.text = [NSString stringWithFormat:@"✅ Đã chép lại từ Lịch sử:\n%@", link];
+        resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
+        [self toggleHistory];
+    }
+}
+
+// ============================================================
+// QUẢN LÝ MENU CHÍNH
+// ============================================================
 + (void)openMenu {
+    [self triggerImpact:UIImpactFeedbackStyleMedium];
     menuContainer.hidden = NO;
     floatingCircleBtn.hidden = YES;
+    infoWidgetLabel.hidden = YES;
     [robloxWindow bringSubviewToFront:menuContainer];
 }
 
 + (void)minimizeMenu {
+    [self triggerImpact:UIImpactFeedbackStyleLight];
     [linkInput resignFirstResponder];
     [apiKeyInput resignFirstResponder];
     menuContainer.hidden = YES;
+    miniBrowserContainer.hidden = YES;
+    historyContainer.hidden = YES;
     floatingCircleBtn.hidden = NO;
+    infoWidgetLabel.hidden = NO;
+    [self syncWidgetPosition];
     [robloxWindow bringSubviewToFront:floatingCircleBtn];
+    [robloxWindow bringSubviewToFront:infoWidgetLabel];
 }
 
 + (NSString *)cleanString:(NSString *)str {
@@ -268,15 +588,11 @@ static UIWindow *robloxWindow = nil;
     return cleaned;
 }
 
-+ (void)onApiKeyEditingBegan {
-    keyActionContainer.hidden = NO;
-}
-
-+ (void)onApiKeyEditingChanged {
-    keyActionContainer.hidden = NO;
-}
++ (void)onApiKeyEditingBegan { keyActionContainer.hidden = NO; }
++ (void)onApiKeyEditingChanged { keyActionContainer.hidden = NO; }
 
 + (void)onConfirmSaveKey {
+    [self triggerNotify:UINotificationFeedbackTypeSuccess];
     [apiKeyInput resignFirstResponder];
     NSString *newKey = [self cleanString:apiKeyInput.text];
     if (newKey.length > 0) {
@@ -289,18 +605,18 @@ static UIWindow *robloxWindow = nil;
 }
 
 + (void)onDiscardKey {
+    [self triggerImpact:UIImpactFeedbackStyleLight];
     [apiKeyInput resignFirstResponder];
     NSString *savedKey = [[NSUserDefaults standardUserDefaults] stringForKey:STORAGE_KEY];
-    if (!savedKey || savedKey.length == 0) {
-        savedKey = DEFAULT_API_KEY;
-    }
+    if (!savedKey || savedKey.length == 0) savedKey = DEFAULT_API_KEY;
     apiKeyInput.text = savedKey;
-    resultDisplay.text = @"↩️ Đã hủy và khôi phục lại Key trước đó.";
+    resultDisplay.text = @"↩️ Đã hủy và khôi phục Key trước đó.";
     resultDisplay.textColor = [UIColor colorWithRed:0.8 green:0.8 blue:0.8 alpha:1.0];
     keyActionContainer.hidden = YES;
 }
 
 + (void)handleBypass {
+    [self triggerImpact:UIImpactFeedbackStyleMedium];
     [linkInput resignFirstResponder];
     [apiKeyInput resignFirstResponder];
 
@@ -312,12 +628,13 @@ static UIWindow *robloxWindow = nil;
 
     NSString *url = [self cleanString:linkInput.text];
     if (url.length == 0) {
+        [self triggerNotify:UINotificationFeedbackTypeError];
         resultDisplay.text = @"❌ Hãy dán link trước!";
         resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
         return;
     }
 
-    resultDisplay.text = @"⏳ Đang gửi request...";
+    resultDisplay.text = @"⏳ Đang gửi request tới Bacon API...";
     resultDisplay.textColor = [UIColor colorWithRed:1.00 green:0.67 blue:0.00 alpha:1.0];
 
     NSURL *endpoint = [NSURL URLWithString:@"https://baconbypass.online/bypass"];
@@ -331,6 +648,7 @@ static UIWindow *robloxWindow = nil;
     [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (err || !data) {
+                [self triggerNotify:UINotificationFeedbackTypeError];
                 resultDisplay.text = @"❌ Mất kết nối API!";
                 resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
                 return;
@@ -338,10 +656,13 @@ static UIWindow *robloxWindow = nil;
             NSError *jsonErr = nil;
             NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonErr];
             if (json && [json[@"status"] isEqualToString:@"success"] && json[@"result"]) {
+                [self triggerNotify:UINotificationFeedbackTypeSuccess];
                 extractedLink = [[NSString alloc] initWithFormat:@"%@", json[@"result"]];
                 resultDisplay.text = [NSString stringWithFormat:@"✅ %@", extractedLink];
                 resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
+                [self saveLinkToHistory:extractedLink];
             } else {
+                [self triggerNotify:UINotificationFeedbackTypeError];
                 NSString *msg = json[@"message"] ?: @"Thất bại!";
                 resultDisplay.text = [NSString stringWithFormat:@"❌ %@", msg];
                 resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
@@ -361,28 +682,34 @@ static UIWindow *robloxWindow = nil;
             }
 
             if (!targetText || targetText.length == 0) {
+                [self triggerNotify:UINotificationFeedbackTypeWarning];
                 resultDisplay.text = @"❌ Chưa có kết quả để sao chép!";
                 resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
                 return;
             }
 
             UIPasteboard *board = [UIPasteboard generalPasteboard];
-            if (board) {
-                [board setString:targetText];
-            }
+            if (board) [board setString:targetText];
+
+            [self triggerNotify:UINotificationFeedbackTypeSuccess];
             resultDisplay.text = @"✅ Đã chép vào bộ nhớ đệm!";
             resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
             linkInput.text = @"";
         } @catch (NSException *e) {
+            [self triggerNotify:UINotificationFeedbackTypeError];
             resultDisplay.text = @"❌ Lỗi sao chép! Hãy nhấn giữ text để copy.";
             resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
         }
     });
 }
 
+// ============================================================
+// KÉO THẢ GIAO DIỆN
+// ============================================================
 + (void)handleDragCircle:(UIPanGestureRecognizer *)g {
     CGPoint trans = [g translationInView:floatingCircleBtn.superview];
     floatingCircleBtn.center = CGPointMake(floatingCircleBtn.center.x + trans.x, floatingCircleBtn.center.y + trans.y);
+    [self syncWidgetPosition];
     [g setTranslation:CGPointZero inView:floatingCircleBtn.superview];
 }
 
@@ -390,6 +717,12 @@ static UIWindow *robloxWindow = nil;
     CGPoint trans = [g translationInView:menuContainer.superview];
     menuContainer.center = CGPointMake(menuContainer.center.x + trans.x, menuContainer.center.y + trans.y);
     [g setTranslation:CGPointZero inView:menuContainer.superview];
+}
+
++ (void)handleDragBrowser:(UIPanGestureRecognizer *)g {
+    CGPoint trans = [g translationInView:miniBrowserContainer.superview];
+    miniBrowserContainer.center = CGPointMake(miniBrowserContainer.center.x + trans.x, miniBrowserContainer.center.y + trans.y);
+    [g setTranslation:CGPointZero inView:miniBrowserContainer.superview];
 }
 
 @end
