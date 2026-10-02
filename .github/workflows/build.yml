@@ -20,6 +20,7 @@ jobs:
               -isysroot "$SDK_PATH" \
               -arch arm64 \
               -miphoneos-version-min=14.0 \
+              -fobjc-arc \
               -framework UIKit \
               -framework Foundation \
               -framework CoreGraphics \
