@@ -1,31 +1,11 @@
 #import <UIKit/UIKit.h>
 
-// ============================================================
-// LỚP WINDOW XUYÊN CẢM ỨNG (PASSTHROUGH TOUCH)
-// ============================================================
-@interface PassthroughWindow : UIWindow
-@end
-
-@implementation PassthroughWindow
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    UIView *hitView = [super hitTest:point withEvent:event];
-    if (hitView == self || hitView == self.rootViewController.view) {
-        return nil;
-    }
-    return hitView;
-}
-@end
-
-// ============================================================
-// OVERLAY QUẢN LÝ GIAO DIỆN VÀ LOGIC BYPASS
-// ============================================================
 @interface BaconBypassOverlay : NSObject
 + (void)load;
 @end
 
 @implementation BaconBypassOverlay
 
-static PassthroughWindow *overlayWindow = nil;
 static UIView *menuContainer = nil;
 static UITextField *apiKeyInput = nil;
 static UIView *keyActionContainer = nil;
@@ -33,47 +13,53 @@ static UITextField *linkInput = nil;
 static UITextView *resultDisplay = nil;
 static UIButton *floatingCircleBtn = nil;
 static NSString *extractedLink = nil;
+static UIWindow *robloxWindow = nil;
 
 #define DEFAULT_API_KEY @"Bacon-68e61ca9d455d316a50c-b4328879cadc0a77f8a5"
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 
 + (void)load {
-    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
-                                                      object:nil
-                                                       queue:[NSOperationQueue mainQueue]
-                                                  usingBlock:^(NSNotification * _Nonnull note) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [self initFloatingOverlay];
-        });
-    }];
+    // Đợi 3.5 giây để Roblox khởi tạo xong engine đồ họa và vượt qua Splash Screen
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self tryInjectOverlay];
+    });
 }
 
-+ (UIWindowScene *)findActiveScene {
++ (UIWindow *)findRobloxWindow {
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
         if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
-            return (UIWindowScene *)scene;
+            UIWindowScene *windowScene = (UIWindowScene *)scene;
+            for (UIWindow *win in windowScene.windows) {
+                if (win.rootViewController != nil && !win.hidden) {
+                    return win;
+                }
+            }
+        }
+    }
+    for (UIWindow *win in [UIApplication sharedApplication].windows) {
+        if (win.rootViewController != nil && !win.hidden) {
+            return win;
         }
     }
     return nil;
 }
 
-+ (void)initFloatingOverlay {
-    if (overlayWindow) return;
++ (void)tryInjectOverlay {
+    if (floatingCircleBtn != nil) return;
 
-    UIWindowScene *activeScene = [self findActiveScene];
-    if (activeScene) {
-        overlayWindow = [[PassthroughWindow alloc] initWithWindowScene:activeScene];
-    } else {
-        overlayWindow = [[PassthroughWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    robloxWindow = [self findRobloxWindow];
+    if (!robloxWindow || !robloxWindow.rootViewController) {
+        // Nếu Roblox chưa nạp xong Window, thử lại sau 1 giây
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self tryInjectOverlay];
+        });
+        return;
     }
 
-    UIViewController *rootVC = [[UIViewController alloc] init];
-    rootVC.view.backgroundColor = [UIColor clearColor];
-    overlayWindow.rootViewController = rootVC;
-    overlayWindow.windowLevel = UIWindowLevelAlert + 100.0;
-    overlayWindow.backgroundColor = [UIColor clearColor];
-    overlayWindow.hidden = NO;
+    [self setupViewsInWindow:robloxWindow];
+}
 
++ (void)setupViewsInWindow:(UIWindow *)targetWindow {
     // ==========================================
     // 1. NÚT TRÒN THU NHỎ (42x42)
     // ==========================================
@@ -93,14 +79,14 @@ static NSString *extractedLink = nil;
 
     UIPanGestureRecognizer *panBtn = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragCircle:)];
     [floatingCircleBtn addGestureRecognizer:panBtn];
-    [rootVC.view addSubview:floatingCircleBtn];
+    [targetWindow addSubview:floatingCircleBtn];
 
     // ==========================================
     // 2. BẢNG MENU CHÍNH
     // ==========================================
     CGFloat menuWidth = 310.0;
     CGFloat menuHeight = 300.0;
-    menuContainer = [[UIView alloc] initWithFrame:CGRectMake((rootVC.view.bounds.size.width - menuWidth) / 2, 100, menuWidth, menuHeight)];
+    menuContainer = [[UIView alloc] initWithFrame:CGRectMake((targetWindow.bounds.size.width - menuWidth) / 2, 100, menuWidth, menuHeight)];
     menuContainer.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.10 alpha:0.96];
     menuContainer.layer.cornerRadius = 12.0;
     menuContainer.layer.borderWidth = 1.0;
@@ -167,7 +153,7 @@ static NSString *extractedLink = nil;
     [apiKeyInput addTarget:self action:@selector(onApiKeyEditingBegan) forControlEvents:UIControlEventEditingDidBegin];
     [menuContainer addSubview:apiKeyInput];
 
-    // Khung nút xác nhận lưu/hủy key
+    // Nút xác nhận: [Lưu] / [Không lưu] API Key
     keyActionContainer = [[UIView alloc] initWithFrame:CGRectMake(12, 75, menuWidth - 24, 26)];
     keyActionContainer.backgroundColor = [UIColor clearColor];
     keyActionContainer.hidden = YES;
@@ -194,7 +180,7 @@ static NSString *extractedLink = nil;
 
     [menuContainer addSubview:keyActionContainer];
 
-    // Ô nhập link
+    // Ô nhập Link cần bypass
     linkInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 106, menuWidth - 24, 32)];
     linkInput.placeholder = @"Dán link cần Bypass vào đây...";
     linkInput.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.22 alpha:1.0];
@@ -231,7 +217,7 @@ static NSString *extractedLink = nil;
     [copyBtn addTarget:self action:@selector(handleCopy) forControlEvents:UIControlEventTouchUpInside];
     [menuContainer addSubview:copyBtn];
 
-    // Hộp kết quả dùng UITextView (vừa chống crash vừa cho phép chạm tay chọn bôi đen link)
+    // Hộp kết quả
     UIView *resultBox = [[UIView alloc] initWithFrame:CGRectMake(12, 186, menuWidth - 24, 102)];
     resultBox.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.06 alpha:1.0];
     resultBox.layer.cornerRadius = 6.0;
@@ -246,12 +232,24 @@ static NSString *extractedLink = nil;
     resultDisplay.selectable = YES;
     [resultBox addSubview:resultDisplay];
 
-    [rootVC.view addSubview:menuContainer];
+    [targetWindow addSubview:menuContainer];
+
+    // Theo dõi thay đổi trạng thái ứng dụng để luôn đưa nút lên trên cùng
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
+                                                      object:nil
+                                                       queue:[NSOperationQueue mainQueue]
+                                                  usingBlock:^(NSNotification * _Nonnull note) {
+        if (robloxWindow) {
+            [robloxWindow bringSubviewToFront:floatingCircleBtn];
+            [robloxWindow bringSubviewToFront:menuContainer];
+        }
+    }];
 }
 
 + (void)openMenu {
     menuContainer.hidden = NO;
     floatingCircleBtn.hidden = YES;
+    [robloxWindow bringSubviewToFront:menuContainer];
 }
 
 + (void)minimizeMenu {
@@ -259,6 +257,7 @@ static NSString *extractedLink = nil;
     [apiKeyInput resignFirstResponder];
     menuContainer.hidden = YES;
     floatingCircleBtn.hidden = NO;
+    [robloxWindow bringSubviewToFront:floatingCircleBtn];
 }
 
 + (NSString *)cleanString:(NSString *)str {
@@ -356,10 +355,9 @@ static NSString *extractedLink = nil;
         @try {
             NSString *targetText = nil;
             if (extractedLink && extractedLink.length > 0) {
-                targetText = [NSString stringWithString:extractedLink];
+                targetText = [extractedLink copy];
             } else if (resultDisplay.text.length > 0 && [resultDisplay.text hasPrefix:@"✅ "]) {
-                targetText = [resultDisplay.text substringFromIndex:2];
-                targetText = [targetText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                targetText = [[resultDisplay.text substringFromIndex:2] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
             }
 
             if (!targetText || targetText.length == 0) {
@@ -368,17 +366,15 @@ static NSString *extractedLink = nil;
                 return;
             }
 
-            // Chống crash UIPasteboard trên iOS Sandbox / Roblox
             UIPasteboard *board = [UIPasteboard generalPasteboard];
             if (board) {
                 [board setString:targetText];
             }
-            
             resultDisplay.text = @"✅ Đã chép vào bộ nhớ đệm!";
             resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
             linkInput.text = @"";
         } @catch (NSException *e) {
-            resultDisplay.text = [NSString stringWithFormat:@"❌ Lỗi copy: %@ (Bạn có thể nhấn giữ text để copy)", e.reason];
+            resultDisplay.text = @"❌ Lỗi sao chép! Hãy nhấn giữ text để copy.";
             resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
         }
     });
