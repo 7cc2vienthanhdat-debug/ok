@@ -24,18 +24,16 @@ static NSString *extractedLink = @"";
 
 + (UIWindow *)fetchActiveWindow {
     UIWindow *targetWindow = nil;
-    for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if (scene.activationState == UISceneActivationStateForegroundActive) {
-            for (UIWindow *window in scene.windows) {
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
+            UIWindowScene *windowScene = (UIWindowScene *)scene;
+            for (UIWindow *window in windowScene.windows) {
                 if (window.isKeyWindow) {
-                    targetWindow = window;
-                    break;
+                    return window;
                 }
+                targetWindow = window;
             }
         }
-    }
-    if (!targetWindow) {
-        targetWindow = [UIApplication sharedApplication].keyWindow;
     }
     return targetWindow;
 }
@@ -79,7 +77,7 @@ static NSString *extractedLink = @"";
     UIPanGestureRecognizer *panMenu = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragMenu:)];
     [menuContainer addGestureRecognizer:panMenu];
 
-    // Header bar
+    // Thanh tiêu đề
     UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, menuWidth, 38)];
     header.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.16 alpha:1.0];
     [menuContainer addSubview:header];
@@ -100,7 +98,7 @@ static NSString *extractedLink = @"";
     [closeBtn addTarget:self action:@selector(toggleMenuVisibility) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:closeBtn];
 
-    // Ô NHẬP VÀ ĐỔI API KEY (Lưu vĩnh viễn vào bộ nhớ)
+    // Ô nhập API Key
     NSString *savedKey = [[NSUserDefaults standardUserDefaults] stringForKey:STORAGE_KEY];
     if (!savedKey || savedKey.length == 0) {
         savedKey = DEFAULT_API_KEY;
@@ -122,7 +120,7 @@ static NSString *extractedLink = @"";
     [apiKeyInput addTarget:self action:@selector(handleKeyChange) forControlEvents:UIControlEventEditingDidEnd];
     [menuContainer addSubview:apiKeyInput];
 
-    // Ô NHẬP LINK CẦN BYPASS
+    // Ô nhập Link
     linkInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 84, menuWidth - 24, 32)];
     linkInput.placeholder = @"Dán link cần Bypass vào đây...";
     linkInput.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.22 alpha:1.0];
@@ -137,7 +135,7 @@ static NSString *extractedLink = @"";
     linkInput.leftViewMode = UITextFieldViewModeAlways;
     [menuContainer addSubview:linkInput];
 
-    // NÚT BẤM BYPASS
+    // Nút Bypass
     UIButton *bypassBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     bypassBtn.frame = CGRectMake(12, 124, (menuWidth - 30) / 2, 34);
     bypassBtn.backgroundColor = [UIColor colorWithRed:1.00 green:0.67 blue:0.00 alpha:1.0];
@@ -148,7 +146,7 @@ static NSString *extractedLink = @"";
     [bypassBtn addTarget:self action:@selector(triggerBypassAction) forControlEvents:UIControlEventTouchUpInside];
     [menuContainer addSubview:bypassBtn];
 
-    // NÚT BẤM SAO CHÉP
+    // Nút Sao chép
     UIButton *copyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 6, 124, (menuWidth - 30) / 2, 34);
     copyBtn.backgroundColor = [UIColor colorWithRed:0.25 green:0.25 blue:0.35 alpha:1.0];
@@ -159,7 +157,7 @@ static NSString *extractedLink = @"";
     [copyBtn addTarget:self action:@selector(triggerCopyAction) forControlEvents:UIControlEventTouchUpInside];
     [menuContainer addSubview:copyBtn];
 
-    // KHUNG HIỂN THỊ LINK KẾT QUẢ
+    // Khung kết quả phía dưới
     UIView *resultBox = [[UIView alloc] initWithFrame:CGRectMake(12, 166, menuWidth - 24, 88)];
     resultBox.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.06 alpha:1.0];
     resultBox.layer.cornerRadius = 6.0;
@@ -265,13 +263,13 @@ static NSString *extractedLink = @"";
 
 + (void)handleDragButton:(UIPanGestureRecognizer *)gesture {
     CGPoint translation = [gesture translationInView:toggleFloatButton.superview];
-    toggleFloatButton.center = CGPointMake(toggleFloatButton.center.X + translation.x, toggleFloatButton.center.Y + translation.y);
+    toggleFloatButton.center = CGPointMake(toggleFloatButton.center.x + translation.x, toggleFloatButton.center.y + translation.y);
     [gesture setTranslation:CGPointZero inView:toggleFloatButton.superview];
 }
 
 + (void)handleDragMenu:(UIPanGestureRecognizer *)gesture {
     CGPoint translation = [gesture translationInView:menuContainer.superview];
-    menuContainer.center = CGPointMake(menuContainer.center.X + translation.x, menuContainer.center.Y + translation.y);
+    menuContainer.center = CGPointMake(menuContainer.center.x + translation.x, menuContainer.center.y + translation.y);
     [gesture setTranslation:CGPointZero inView:menuContainer.superview];
 }
 
