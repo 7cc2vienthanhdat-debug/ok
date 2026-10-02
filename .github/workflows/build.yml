@@ -10,10 +10,10 @@ jobs:
     runs-on: macos-latest
 
     steps:
-    - name: Checkout code
+    - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Compile Objective-C to arm64 Dylib
+    - name: Compile Objective-C to iOS arm64 Dylib
       run: |
         SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
         clang -dynamiclib \
