@@ -24,6 +24,8 @@ jobs:
               -framework UIKit \
               -framework Foundation \
               -framework CoreGraphics \
+              -framework QuartzCore \
+              -framework WebKit \
               BaconBypass.m \
               -o libBaconBypass.dylib
 
