@@ -32,7 +32,7 @@ static NSInteger frameCount = 0;
 static CFTimeInterval lastFpsTime = 0;
 static NSInteger currentFPS = 60;
 
-#define DEFAULT_API_KEY @"Bacon-440724857a7206c7a2d2-6bcdc55374f77bd35806"
+#define DEFAULT_API_KEY @"Bacon-68e61ca9d455d316a50c-b4328879cadc0a77f8a5"
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 #define HISTORY_KEY @"BaconBypass_HistoryLinks"
 
