@@ -1,12 +1,32 @@
 #import <UIKit/UIKit.h>
 
+// ============================================================
+// LỚP WINDOW XUYÊN CẢM ỨNG (PASSTHROUGH TOUCH)
+// ============================================================
+@interface PassthroughWindow : UIWindow
+@end
+
+@implementation PassthroughWindow
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *hitView = [super hitTest:point withEvent:event];
+    // Nếu điểm chạm rơi vào vùng trống của Window/RootView thì bỏ qua để game nhận cảm ứng
+    if (hitView == self || hitView == self.rootViewController.view) {
+        return nil;
+    }
+    return hitView;
+}
+@end
+
+// ============================================================
+// OVERLAY QUẢN LÝ GIAO DIỆN VÀ LOGIC BYPASS
+// ============================================================
 @interface BaconBypassOverlay : NSObject
 + (void)load;
 @end
 
 @implementation BaconBypassOverlay
 
-static UIWindow *overlayWindow = nil;
+static PassthroughWindow *overlayWindow = nil;
 static UIView *menuContainer = nil;
 static UITextField *apiKeyInput = nil;
 static UITextField *linkInput = nil;
@@ -18,7 +38,6 @@ static NSString *extractedLink = @"";
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 
 + (void)load {
-    // Đăng ký nhận thông báo khi ứng dụng đã sẵn sàng hiển thị UI
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
@@ -32,7 +51,6 @@ static NSString *extractedLink = @"";
 + (void)initFloatingOverlay {
     if (overlayWindow) return;
 
-    // 1. Tạo UIWindow riêng biệt nổi trên mọi tầng đồ họa của Roblox
     UIWindowScene *activeScene = nil;
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
         if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
@@ -41,21 +59,22 @@ static NSString *extractedLink = @"";
         }
     }
 
+    // Khởi tạo Window xuyên cảm ứng
     if (activeScene) {
-        overlayWindow = [[UIWindow alloc] initWithWindowScene:activeScene];
+        overlayWindow = [[PassthroughWindow alloc] initWithWindowScene:activeScene];
     } else {
-        overlayWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        overlayWindow = [[PassthroughWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     }
 
     UIViewController *rootVC = [[UIViewController alloc] init];
     rootVC.view.backgroundColor = [UIColor clearColor];
     overlayWindow.rootViewController = rootVC;
-    overlayWindow.windowLevel = UIWindowLevelAlert + 100.0; // Cao hơn UI game
+    overlayWindow.windowLevel = UIWindowLevelAlert + 100.0;
     overlayWindow.backgroundColor = [UIColor clearColor];
     overlayWindow.hidden = NO;
 
     // ==========================================
-    // 2. NÚT TRÒN THU NHỎ (GỌN GÀNG, KÉO ĐƯỢC)
+    // 1. NÚT TRÒN THU NHỎ
     // ==========================================
     floatingCircleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     floatingCircleBtn.frame = CGRectMake(25, 120, 42, 42);
@@ -76,7 +95,7 @@ static NSString *extractedLink = @"";
     [rootVC.view addSubview:floatingCircleBtn];
 
     // ==========================================
-    // 3. BẢNG MENU CHI TIẾT
+    // 2. BẢNG MENU CHI TIẾT
     // ==========================================
     CGFloat menuWidth = 310.0;
     CGFloat menuHeight = 265.0;
@@ -86,12 +105,12 @@ static NSString *extractedLink = @"";
     menuContainer.layer.borderWidth = 1.0;
     menuContainer.layer.borderColor = [UIColor colorWithRed:0.25 green:0.25 blue:0.32 alpha:1.0].CGColor;
     menuContainer.clipsToBounds = YES;
-    menuContainer.hidden = YES; // Mặc định ẩn, chỉ hiện nút tròn
+    menuContainer.hidden = YES;
 
     UIPanGestureRecognizer *panMenu = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragMenu:)];
     [menuContainer addGestureRecognizer:panMenu];
 
-    // Header bar
+    // Thanh Header
     UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, menuWidth, 38)];
     header.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.16 alpha:1.0];
     [menuContainer addSubview:header];
@@ -113,7 +132,7 @@ static NSString *extractedLink = @"";
     [minBtn addTarget:self action:@selector(minimizeMenu) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:minBtn];
 
-    // Nút Đóng hẳn (✕)
+    // Nút Đóng (✕)
     UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     closeBtn.frame = CGRectMake(menuWidth - 32, 6, 26, 26);
     closeBtn.backgroundColor = [UIColor colorWithRed:0.80 green:0.20 blue:0.20 alpha:1.0];
@@ -124,7 +143,7 @@ static NSString *extractedLink = @"";
     [closeBtn addTarget:self action:@selector(minimizeMenu) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:closeBtn];
 
-    // Ô API Key
+    // Ô nhập API Key
     NSString *savedKey = [[NSUserDefaults standardUserDefaults] stringForKey:STORAGE_KEY];
     if (!savedKey || savedKey.length == 0) {
         savedKey = DEFAULT_API_KEY;
@@ -145,7 +164,7 @@ static NSString *extractedLink = @"";
     [apiKeyInput addTarget:self action:@selector(saveKeyLocally) forControlEvents:UIControlEventEditingDidEnd];
     [menuContainer addSubview:apiKeyInput];
 
-    // Ô Link cần bypass
+    // Ô nhập Link
     linkInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 84, menuWidth - 24, 32)];
     linkInput.placeholder = @"Dán link cần Bypass vào đây...";
     linkInput.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.22 alpha:1.0];
@@ -200,14 +219,14 @@ static NSString *extractedLink = @"";
 
 + (void)openMenu {
     menuContainer.hidden = NO;
-    floatingCircleBtn.hidden = YES; // Ẩn nút tròn khi mở bảng
+    floatingCircleBtn.hidden = YES;
 }
 
 + (void)minimizeMenu {
     [linkInput resignFirstResponder];
     [apiKeyInput resignFirstResponder];
     menuContainer.hidden = YES;
-    floatingCircleBtn.hidden = NO; // Hiện lại nút tròn gọn gàng
+    floatingCircleBtn.hidden = NO;
 }
 
 + (void)saveKeyLocally {
