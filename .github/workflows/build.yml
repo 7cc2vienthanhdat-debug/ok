@@ -1,8 +1,9 @@
-name: Build iOS App
+name: Build iOS Dylib
 
 on:
   push:
-    branches: [ main ]
+    branches: [ "main", "master" ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -12,28 +13,20 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Install Briefcase and dependencies
+    - name: Compile Objective-C to arm64 Dylib
       run: |
-        python -m pip install --upgrade pip
-        pip install briefcase
+        SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+        clang -dynamiclib \
+              -isysroot "$SDK_PATH" \
+              -arch arm64 \
+              -miphoneos-version-min=14.0 \
+              -framework UIKit \
+              -framework Foundation \
+              BaconBypass.m \
+              -o libBaconBypass.dylib
 
-    - name: Build iOS App
-      run: |
-        briefcase create iOS --no-input
-        briefcase build iOS --no-input
-
-    - name: Package App folder into a zip/tar for download
-      run: |
-        cd build/il2cppoffsetanalyzer/ios/xcode/build/Debug-iphonesimulator/
-        zip -r Il2CppOffsetAnalyzer.zip Il2CppOffsetAnalyzer.app
-
-    - name: Upload App Artifact
+    - name: Upload Dylib Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ios-app-folder
-        path: build/il2cppoffsetanalyzer/ios/xcode/build/Debug-iphonesimulator/Il2CppOffsetAnalyzer.zip
+        name: BaconBypass-Dylib
+        path: libBaconBypass.dylib
