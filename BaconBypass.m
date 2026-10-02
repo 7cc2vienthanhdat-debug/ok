@@ -30,9 +30,9 @@ static UIView *menuContainer = nil;
 static UITextField *apiKeyInput = nil;
 static UIView *keyActionContainer = nil;
 static UITextField *linkInput = nil;
-static UILabel *resultDisplay = nil;
+static UITextView *resultDisplay = nil;
 static UIButton *floatingCircleBtn = nil;
-static NSString *extractedLink = @"";
+static NSString *extractedLink = nil;
 
 #define DEFAULT_API_KEY @"Bacon-68e61ca9d455d316a50c-b4328879cadc0a77f8a5"
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
@@ -167,10 +167,10 @@ static NSString *extractedLink = @"";
     [apiKeyInput addTarget:self action:@selector(onApiKeyEditingBegan) forControlEvents:UIControlEventEditingDidBegin];
     [menuContainer addSubview:apiKeyInput];
 
-    // KHUNG NÚT XÁC NHẬN: [LƯU] HOẶC [KHÔNG LƯU] API KEY
+    // Khung nút xác nhận lưu/hủy key
     keyActionContainer = [[UIView alloc] initWithFrame:CGRectMake(12, 75, menuWidth - 24, 26)];
     keyActionContainer.backgroundColor = [UIColor clearColor];
-    keyActionContainer.hidden = YES; // Mặc định ẩn, chỉ hiện khi người dùng chỉnh sửa key
+    keyActionContainer.hidden = YES;
 
     UIButton *saveKeyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     saveKeyBtn.frame = CGRectMake(0, 0, (menuWidth - 30) / 2, 26);
@@ -194,7 +194,7 @@ static NSString *extractedLink = @"";
 
     [menuContainer addSubview:keyActionContainer];
 
-    // Ô nhập Link cần bypass
+    // Ô nhập link
     linkInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 106, menuWidth - 24, 32)];
     linkInput.placeholder = @"Dán link cần Bypass vào đây...";
     linkInput.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.22 alpha:1.0];
@@ -231,18 +231,19 @@ static NSString *extractedLink = @"";
     [copyBtn addTarget:self action:@selector(handleCopy) forControlEvents:UIControlEventTouchUpInside];
     [menuContainer addSubview:copyBtn];
 
-    // Hộp kết quả
+    // Hộp kết quả dùng UITextView (vừa chống crash vừa cho phép chạm tay chọn bôi đen link)
     UIView *resultBox = [[UIView alloc] initWithFrame:CGRectMake(12, 186, menuWidth - 24, 102)];
     resultBox.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.06 alpha:1.0];
     resultBox.layer.cornerRadius = 6.0;
     [menuContainer addSubview:resultBox];
 
-    resultDisplay = [[UILabel alloc] initWithFrame:CGRectMake(8, 6, menuWidth - 40, 90)];
+    resultDisplay = [[UITextView alloc] initWithFrame:CGRectMake(6, 4, menuWidth - 36, 94)];
     resultDisplay.text = @"Dán link rồi ấn Bypass Ngay...";
     resultDisplay.textColor = [UIColor colorWithRed:0.6 green:0.6 blue:0.65 alpha:1.0];
     resultDisplay.font = [UIFont systemFontOfSize:11];
-    resultDisplay.numberOfLines = 0;
-    resultDisplay.lineBreakMode = NSLineBreakByWordWrapping;
+    resultDisplay.backgroundColor = [UIColor clearColor];
+    resultDisplay.editable = NO;
+    resultDisplay.selectable = YES;
     [resultBox addSubview:resultDisplay];
 
     [rootVC.view addSubview:menuContainer];
@@ -268,7 +269,6 @@ static NSString *extractedLink = @"";
     return cleaned;
 }
 
-// Bắt sự kiện khi người dùng gõ / dán key mới
 + (void)onApiKeyEditingBegan {
     keyActionContainer.hidden = NO;
 }
@@ -277,7 +277,6 @@ static NSString *extractedLink = @"";
     keyActionContainer.hidden = NO;
 }
 
-// Hành động khi ấn: [Lưu API Key]
 + (void)onConfirmSaveKey {
     [apiKeyInput resignFirstResponder];
     NSString *newKey = [self cleanString:apiKeyInput.text];
@@ -290,7 +289,6 @@ static NSString *extractedLink = @"";
     keyActionContainer.hidden = YES;
 }
 
-// Hành động khi ấn: [Không lưu]
 + (void)onDiscardKey {
     [apiKeyInput resignFirstResponder];
     NSString *savedKey = [[NSUserDefaults standardUserDefaults] stringForKey:STORAGE_KEY];
@@ -338,13 +336,15 @@ static NSString *extractedLink = @"";
                 resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
                 return;
             }
-            NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            NSError *jsonErr = nil;
+            NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonErr];
             if (json && [json[@"status"] isEqualToString:@"success"] && json[@"result"]) {
-                extractedLink = [NSString stringWithFormat:@"%@", json[@"result"]];
+                extractedLink = [[NSString alloc] initWithFormat:@"%@", json[@"result"]];
                 resultDisplay.text = [NSString stringWithFormat:@"✅ %@", extractedLink];
                 resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
             } else {
-                resultDisplay.text = [NSString stringWithFormat:@"❌ %@", json[@"message"] ?: @"Thất bại!"];
+                NSString *msg = json[@"message"] ?: @"Thất bại!";
+                resultDisplay.text = [NSString stringWithFormat:@"❌ %@", msg];
                 resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
             }
         });
@@ -352,12 +352,36 @@ static NSString *extractedLink = @"";
 }
 
 + (void)handleCopy {
-    if (extractedLink.length > 0) {
-        [UIPasteboard generalPasteboard].string = extractedLink;
-        resultDisplay.text = @"✅ Đã chép vào bộ nhớ đệm!";
-        resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
-        linkInput.text = @"";
-    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @try {
+            NSString *targetText = nil;
+            if (extractedLink && extractedLink.length > 0) {
+                targetText = [NSString stringWithString:extractedLink];
+            } else if (resultDisplay.text.length > 0 && [resultDisplay.text hasPrefix:@"✅ "]) {
+                targetText = [resultDisplay.text substringFromIndex:2];
+                targetText = [targetText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            }
+
+            if (!targetText || targetText.length == 0) {
+                resultDisplay.text = @"❌ Chưa có kết quả để sao chép!";
+                resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
+                return;
+            }
+
+            // Chống crash UIPasteboard trên iOS Sandbox / Roblox
+            UIPasteboard *board = [UIPasteboard generalPasteboard];
+            if (board) {
+                [board setString:targetText];
+            }
+            
+            resultDisplay.text = @"✅ Đã chép vào bộ nhớ đệm!";
+            resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
+            linkInput.text = @"";
+        } @catch (NSException *e) {
+            resultDisplay.text = [NSString stringWithFormat:@"❌ Lỗi copy: %@ (Bạn có thể nhấn giữ text để copy)", e.reason];
+            resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
+        }
+    });
 }
 
 + (void)handleDragCircle:(UIPanGestureRecognizer *)g {
