@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
+#import <objc/runtime.h>
 
 @interface BaconBypassOverlay : NSObject <WKNavigationDelegate>
 + (void)load;
@@ -31,7 +32,7 @@ static NSInteger frameCount = 0;
 static CFTimeInterval lastFpsTime = 0;
 static NSInteger currentFPS = 60;
 
-#define DEFAULT_API_KEY @"Bacon-68e61ca9d455d316a50c-b4328879cadc0a77f8a5"
+#define DEFAULT_API_KEY @"Bacon-440724857a7206c7a2d2-6bcdc55374f77bd35806"
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 #define HISTORY_KEY @"BaconBypass_HistoryLinks"
 
@@ -104,13 +105,13 @@ static NSInteger currentFPS = 60;
 }
 
 + (void)onRenderFrame:(CADisplayLink *)link {
-    // 1. Hiệu ứng viền chuyển màu cầu vồng (RGB Glow)
+    // Hiệu ứng viền chuyển màu cầu vồng (RGB Glow)
     currentHue += 0.006;
     if (currentHue > 1.0) currentHue = 0.0;
     UIColor *rainbowColor = [UIColor colorWithHue:currentHue saturation:0.95 brightness:1.0 alpha:1.0];
     floatingCircleBtn.layer.borderColor = rainbowColor.CGColor;
 
-    // 2. Tính toán FPS thực tế
+    // Đo FPS
     frameCount++;
     if (lastFpsTime == 0) lastFpsTime = link.timestamp;
     CFTimeInterval delta = link.timestamp - lastFpsTime;
@@ -126,12 +127,10 @@ static NSInteger currentFPS = 60;
 + (void)updateInfoWidgetText {
     if (!infoWidgetLabel || infoWidgetLabel.hidden) return;
 
-    // Lấy giờ
     NSDateFormatter *df = [[NSDateFormatter alloc] init];
     [df setDateFormat:@"HH:mm"];
     NSString *timeStr = [df stringFromDate:[NSDate date]];
 
-    // Lấy pin
     float bat = [UIDevice currentDevice].batteryLevel;
     int batPct = (bat < 0) ? 100 : (int)(bat * 100.0f);
 
@@ -347,13 +346,12 @@ static NSInteger currentFPS = 60;
 
     [targetWindow addSubview:menuContainer];
 
-    // 4. Khởi tạo Trình duyệt Mini In-App (WKWebView)
+    // Khởi tạo Trình duyệt Mini In-App
     [self setupMiniBrowserInWindow:targetWindow];
 
-    // 5. Khởi tạo Bảng Lịch Sử
+    // Khởi tạo Bảng Lịch Sử
     [self setupHistoryOverlayInWindow:targetWindow];
 
-    // Đưa giao diện lên trước khi game active
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
@@ -380,7 +378,6 @@ static NSInteger currentFPS = 60;
     miniBrowserContainer.clipsToBounds = YES;
     miniBrowserContainer.hidden = YES;
 
-    // Header Browser
     UIView *bHeader = [[UIView alloc] initWithFrame:CGRectMake(0, 0, bWidth, 38)];
     bHeader.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.18 alpha:1.0];
     UIPanGestureRecognizer *panWeb = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragBrowser:)];
@@ -411,7 +408,6 @@ static NSInteger currentFPS = 60;
     [closeWebBtn addTarget:self action:@selector(toggleMiniBrowser) forControlEvents:UIControlEventTouchUpInside];
     [bHeader addSubview:closeWebBtn];
 
-    // WKWebView
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     miniWebView = [[WKWebView alloc] initWithFrame:CGRectMake(0, 38, bWidth, bHeight - 38) configuration:config];
     miniWebView.backgroundColor = [UIColor whiteColor];
@@ -451,7 +447,6 @@ static NSInteger currentFPS = 60;
     historyContainer.clipsToBounds = YES;
     historyContainer.hidden = YES;
 
-    // Header
     UIView *hHeader = [[UIView alloc] initWithFrame:CGRectMake(0, 0, hWidth, 36)];
     hHeader.backgroundColor = [UIColor colorWithRed:0.14 green:0.14 blue:0.18 alpha:1.0];
     [historyContainer addSubview:hHeader];
