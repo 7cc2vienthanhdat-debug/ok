@@ -6,99 +6,125 @@
 
 @implementation BaconBypassOverlay
 
+static UIWindow *overlayWindow = nil;
 static UIView *menuContainer = nil;
 static UITextField *apiKeyInput = nil;
 static UITextField *linkInput = nil;
 static UILabel *resultDisplay = nil;
-static UIButton *toggleFloatButton = nil;
+static UIButton *floatingCircleBtn = nil;
 static NSString *extractedLink = @"";
 
 #define DEFAULT_API_KEY @"Bacon-440724857a7206c7a2d2-6bcdc55374f77bd35806"
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 
 + (void)load {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self setupUI];
-    });
+    // Đăng ký nhận thông báo khi ứng dụng đã sẵn sàng hiển thị UI
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
+                                                      object:nil
+                                                       queue:[NSOperationQueue mainQueue]
+                                                  usingBlock:^(NSNotification * _Nonnull note) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self initFloatingOverlay];
+        });
+    }];
 }
 
-+ (UIWindow *)fetchActiveWindow {
-    UIWindow *targetWindow = nil;
++ (void)initFloatingOverlay {
+    if (overlayWindow) return;
+
+    // 1. Tạo UIWindow riêng biệt nổi trên mọi tầng đồ họa của Roblox
+    UIWindowScene *activeScene = nil;
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
         if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
-            UIWindowScene *windowScene = (UIWindowScene *)scene;
-            for (UIWindow *window in windowScene.windows) {
-                if (window.isKeyWindow) {
-                    return window;
-                }
-                targetWindow = window;
-            }
+            activeScene = (UIWindowScene *)scene;
+            break;
         }
     }
-    return targetWindow;
-}
 
-+ (void)setupUI {
-    UIWindow *window = [self fetchActiveWindow];
-    if (!window) return;
+    if (activeScene) {
+        overlayWindow = [[UIWindow alloc] initWithWindowScene:activeScene];
+    } else {
+        overlayWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    }
 
-    // ==========================================
-    // 1. NÚT TRÒN NỔI (MỞ / ĐÓNG MENU)
-    // ==========================================
-    toggleFloatButton = [UIButton buttonWithType:UIButtonTypeCustom];
-    toggleFloatButton.frame = CGRectMake(20, 120, 48, 48);
-    toggleFloatButton.backgroundColor = [UIColor colorWithRed:1.00 green:0.67 blue:0.00 alpha:1.0];
-    toggleFloatButton.layer.cornerRadius = 24.0;
-    toggleFloatButton.layer.shadowColor = [UIColor blackColor].CGColor;
-    toggleFloatButton.layer.shadowOffset = CGSizeMake(0, 3);
-    toggleFloatButton.layer.shadowOpacity = 0.5;
-    toggleFloatButton.layer.shadowRadius = 4.0;
-    [toggleFloatButton setTitle:@"🔗" forState:UIControlStateNormal];
-    toggleFloatButton.titleLabel.font = [UIFont systemFontOfSize:22];
-    [toggleFloatButton addTarget:self action:@selector(toggleMenuVisibility) forControlEvents:UIControlEventTouchUpInside];
-
-    UIPanGestureRecognizer *panBtn = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragButton:)];
-    [toggleFloatButton addGestureRecognizer:panBtn];
-    [window addSubview:toggleFloatButton];
+    UIViewController *rootVC = [[UIViewController alloc] init];
+    rootVC.view.backgroundColor = [UIColor clearColor];
+    overlayWindow.rootViewController = rootVC;
+    overlayWindow.windowLevel = UIWindowLevelAlert + 100.0; // Cao hơn UI game
+    overlayWindow.backgroundColor = [UIColor clearColor];
+    overlayWindow.hidden = NO;
 
     // ==========================================
-    // 2. BẢNG MENU CHÍNH
+    // 2. NÚT TRÒN THU NHỎ (GỌN GÀNG, KÉO ĐƯỢC)
+    // ==========================================
+    floatingCircleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    floatingCircleBtn.frame = CGRectMake(25, 120, 42, 42);
+    floatingCircleBtn.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.16 alpha:0.85];
+    floatingCircleBtn.layer.cornerRadius = 21.0;
+    floatingCircleBtn.layer.borderWidth = 1.5;
+    floatingCircleBtn.layer.borderColor = [UIColor colorWithRed:1.00 green:0.67 blue:0.00 alpha:0.9].CGColor;
+    floatingCircleBtn.layer.shadowColor = [UIColor blackColor].CGColor;
+    floatingCircleBtn.layer.shadowOffset = CGSizeMake(0, 2);
+    floatingCircleBtn.layer.shadowOpacity = 0.4;
+    floatingCircleBtn.layer.shadowRadius = 4.0;
+    [floatingCircleBtn setTitle:@"⚡" forState:UIControlStateNormal];
+    floatingCircleBtn.titleLabel.font = [UIFont systemFontOfSize:18];
+    [floatingCircleBtn addTarget:self action:@selector(openMenu) forControlEvents:UIControlEventTouchUpInside];
+
+    UIPanGestureRecognizer *panBtn = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragCircle:)];
+    [floatingCircleBtn addGestureRecognizer:panBtn];
+    [rootVC.view addSubview:floatingCircleBtn];
+
+    // ==========================================
+    // 3. BẢNG MENU CHI TIẾT
     // ==========================================
     CGFloat menuWidth = 310.0;
     CGFloat menuHeight = 265.0;
-    menuContainer = [[UIView alloc] initWithFrame:CGRectMake((window.bounds.size.width - menuWidth) / 2, 100, menuWidth, menuHeight)];
+    menuContainer = [[UIView alloc] initWithFrame:CGRectMake((rootVC.view.bounds.size.width - menuWidth) / 2, 120, menuWidth, menuHeight)];
     menuContainer.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.10 alpha:0.96];
     menuContainer.layer.cornerRadius = 12.0;
     menuContainer.layer.borderWidth = 1.0;
     menuContainer.layer.borderColor = [UIColor colorWithRed:0.25 green:0.25 blue:0.32 alpha:1.0].CGColor;
     menuContainer.clipsToBounds = YES;
-    menuContainer.hidden = YES;
+    menuContainer.hidden = YES; // Mặc định ẩn, chỉ hiện nút tròn
 
     UIPanGestureRecognizer *panMenu = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragMenu:)];
     [menuContainer addGestureRecognizer:panMenu];
 
-    // Thanh tiêu đề
+    // Header bar
     UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, menuWidth, 38)];
     header.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.16 alpha:1.0];
     [menuContainer addSubview:header];
 
-    UILabel *headerTitle = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, 220, 38)];
+    UILabel *headerTitle = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, 180, 38)];
     headerTitle.text = @"⚡ BACON BYPASS";
     headerTitle.textColor = [UIColor colorWithRed:1.00 green:0.67 blue:0.00 alpha:1.0];
     headerTitle.font = [UIFont boldSystemFontOfSize:13];
     [header addSubview:headerTitle];
 
+    // Nút Thu nhỏ (−)
+    UIButton *minBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    minBtn.frame = CGRectMake(menuWidth - 62, 6, 26, 26);
+    minBtn.backgroundColor = [UIColor colorWithRed:0.25 green:0.25 blue:0.35 alpha:1.0];
+    minBtn.layer.cornerRadius = 6.0;
+    [minBtn setTitle:@"−" forState:UIControlStateNormal];
+    [minBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    minBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    [minBtn addTarget:self action:@selector(minimizeMenu) forControlEvents:UIControlEventTouchUpInside];
+    [header addSubview:minBtn];
+
+    // Nút Đóng hẳn (✕)
     UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    closeBtn.frame = CGRectMake(menuWidth - 36, 6, 26, 26);
+    closeBtn.frame = CGRectMake(menuWidth - 32, 6, 26, 26);
     closeBtn.backgroundColor = [UIColor colorWithRed:0.80 green:0.20 blue:0.20 alpha:1.0];
     closeBtn.layer.cornerRadius = 6.0;
     [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
     [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     closeBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
-    [closeBtn addTarget:self action:@selector(toggleMenuVisibility) forControlEvents:UIControlEventTouchUpInside];
+    [closeBtn addTarget:self action:@selector(minimizeMenu) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:closeBtn];
 
-    // Ô nhập API Key
+    // Ô API Key
     NSString *savedKey = [[NSUserDefaults standardUserDefaults] stringForKey:STORAGE_KEY];
     if (!savedKey || savedKey.length == 0) {
         savedKey = DEFAULT_API_KEY;
@@ -113,14 +139,13 @@ static NSString *extractedLink = @"";
     apiKeyInput.layer.cornerRadius = 6.0;
     apiKeyInput.autocorrectionType = UITextAutocorrectionTypeNo;
     apiKeyInput.autocapitalizationType = UITextAutocapitalizationTypeNone;
-    apiKeyInput.clearButtonMode = UITextFieldViewModeWhileEditing;
-    UIView *leftPaddingKey = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 8, 30)];
-    apiKeyInput.leftView = leftPaddingKey;
+    UIView *padKey = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 8, 30)];
+    apiKeyInput.leftView = padKey;
     apiKeyInput.leftViewMode = UITextFieldViewModeAlways;
-    [apiKeyInput addTarget:self action:@selector(handleKeyChange) forControlEvents:UIControlEventEditingDidEnd];
+    [apiKeyInput addTarget:self action:@selector(saveKeyLocally) forControlEvents:UIControlEventEditingDidEnd];
     [menuContainer addSubview:apiKeyInput];
 
-    // Ô nhập Link
+    // Ô Link cần bypass
     linkInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 84, menuWidth - 24, 32)];
     linkInput.placeholder = @"Dán link cần Bypass vào đây...";
     linkInput.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.22 alpha:1.0];
@@ -129,9 +154,8 @@ static NSString *extractedLink = @"";
     linkInput.layer.cornerRadius = 6.0;
     linkInput.autocorrectionType = UITextAutocorrectionTypeNo;
     linkInput.autocapitalizationType = UITextAutocapitalizationTypeNone;
-    linkInput.clearButtonMode = UITextFieldViewModeWhileEditing;
-    UIView *leftPaddingLink = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 8, 32)];
-    linkInput.leftView = leftPaddingLink;
+    UIView *padLink = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 8, 32)];
+    linkInput.leftView = padLink;
     linkInput.leftViewMode = UITextFieldViewModeAlways;
     [menuContainer addSubview:linkInput];
 
@@ -143,7 +167,7 @@ static NSString *extractedLink = @"";
     [bypassBtn setTitle:@"Bypass Ngay" forState:UIControlStateNormal];
     [bypassBtn setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
     bypassBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
-    [bypassBtn addTarget:self action:@selector(triggerBypassAction) forControlEvents:UIControlEventTouchUpInside];
+    [bypassBtn addTarget:self action:@selector(handleBypass) forControlEvents:UIControlEventTouchUpInside];
     [menuContainer addSubview:bypassBtn];
 
     // Nút Sao chép
@@ -154,10 +178,10 @@ static NSString *extractedLink = @"";
     [copyBtn setTitle:@"Sao Chép" forState:UIControlStateNormal];
     [copyBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     copyBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
-    [copyBtn addTarget:self action:@selector(triggerCopyAction) forControlEvents:UIControlEventTouchUpInside];
+    [copyBtn addTarget:self action:@selector(handleCopy) forControlEvents:UIControlEventTouchUpInside];
     [menuContainer addSubview:copyBtn];
 
-    // Khung kết quả phía dưới
+    // Hộp kết quả
     UIView *resultBox = [[UIView alloc] initWithFrame:CGRectMake(12, 166, menuWidth - 24, 88)];
     resultBox.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.06 alpha:1.0];
     resultBox.layer.cornerRadius = 6.0;
@@ -171,106 +195,94 @@ static NSString *extractedLink = @"";
     resultDisplay.lineBreakMode = NSLineBreakByWordWrapping;
     [resultBox addSubview:resultDisplay];
 
-    [window addSubview:menuContainer];
+    [rootVC.view addSubview:menuContainer];
 }
 
-+ (void)handleKeyChange {
-    NSString *currentKey = [apiKeyInput.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (currentKey.length > 0) {
-        [[NSUserDefaults standardUserDefaults] setObject:currentKey forKey:STORAGE_KEY];
++ (void)openMenu {
+    menuContainer.hidden = NO;
+    floatingCircleBtn.hidden = YES; // Ẩn nút tròn khi mở bảng
+}
+
++ (void)minimizeMenu {
+    [linkInput resignFirstResponder];
+    [apiKeyInput resignFirstResponder];
+    menuContainer.hidden = YES;
+    floatingCircleBtn.hidden = NO; // Hiện lại nút tròn gọn gàng
+}
+
++ (void)saveKeyLocally {
+    NSString *key = [apiKeyInput.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (key.length > 0) {
+        [[NSUserDefaults standardUserDefaults] setObject:key forKey:STORAGE_KEY];
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
 }
 
-+ (void)toggleMenuVisibility {
-    menuContainer.hidden = !menuContainer.hidden;
-    if (menuContainer.hidden) {
-        [linkInput resignFirstResponder];
-        [apiKeyInput resignFirstResponder];
-    }
-}
-
-+ (void)triggerBypassAction {
++ (void)handleBypass {
     [linkInput resignFirstResponder];
     [apiKeyInput resignFirstResponder];
+    [self saveKeyLocally];
 
-    [self handleKeyChange];
+    NSString *key = [apiKeyInput.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (key.length == 0) key = DEFAULT_API_KEY;
 
-    NSString *activeKey = [apiKeyInput.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (activeKey.length == 0) {
-        activeKey = DEFAULT_API_KEY;
-    }
-
-    NSString *inputUrl = [linkInput.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (inputUrl.length == 0) {
-        resultDisplay.text = @"❌ Vui lòng dán link trước khi bấm Bypass!";
+    NSString *url = [linkInput.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (url.length == 0) {
+        resultDisplay.text = @"❌ Hãy dán link trước!";
         resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
         return;
     }
 
-    resultDisplay.text = @"⏳ Đang xử lý Bypass...";
+    resultDisplay.text = @"⏳ Đang gửi request...";
     resultDisplay.textColor = [UIColor colorWithRed:1.00 green:0.67 blue:0.00 alpha:1.0];
 
-    NSURL *apiEndpoint = [NSURL URLWithString:@"https://baconbypass.online/bypass"];
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:apiEndpoint];
-    request.HTTPMethod = @"POST";
-    [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    NSURL *endpoint = [NSURL URLWithString:@"https://baconbypass.online/bypass"];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:endpoint];
+    req.HTTPMethod = @"POST";
+    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
 
-    NSDictionary *jsonBody = @{
-        @"url": inputUrl,
-        @"apikey": activeKey
-    };
+    NSDictionary *body = @{ @"url": url, @"apikey": key };
+    req.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
 
-    NSError *jsonError;
-    request.HTTPBody = [NSJSONSerialization dataWithJSONObject:jsonBody options:0 error:&jsonError];
-
-    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (error || !data) {
-                resultDisplay.text = @"❌ Lỗi kết nối mạng đến máy chủ!";
+            if (err || !data) {
+                resultDisplay.text = @"❌ Mất kết nối API!";
                 resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
                 return;
             }
-
-            NSError *parseError;
-            NSDictionary *resJson = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
-
-            if (resJson && [resJson[@"status"] isEqualToString:@"success"] && resJson[@"result"]) {
-                extractedLink = [NSString stringWithFormat:@"%@", resJson[@"result"]];
+            NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            if (json && [json[@"status"] isEqualToString:@"success"] && json[@"result"]) {
+                extractedLink = [NSString stringWithFormat:@"%@", json[@"result"]];
                 resultDisplay.text = [NSString stringWithFormat:@"✅ %@", extractedLink];
                 resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
             } else {
-                NSString *msg = resJson[@"message"] ?: @"Key hết hạn hoặc link không hỗ trợ!";
-                resultDisplay.text = [NSString stringWithFormat:@"❌ %@", msg];
+                resultDisplay.text = [NSString stringWithFormat:@"❌ %@", json[@"message"] ?: @"Thất bại!"];
                 resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
             }
         });
-    }];
-    [task resume];
+    }] resume];
 }
 
-+ (void)triggerCopyAction {
++ (void)handleCopy {
     if (extractedLink.length > 0) {
         [UIPasteboard generalPasteboard].string = extractedLink;
-        resultDisplay.text = @"✅ Đã sao chép vào Clipboard!";
+        resultDisplay.text = @"✅ Đã chép vào bộ nhớ đệm!";
         resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
         linkInput.text = @"";
-    } else {
-        resultDisplay.text = @"❌ Chưa có kết quả để sao chép!";
-        resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
     }
 }
 
-+ (void)handleDragButton:(UIPanGestureRecognizer *)gesture {
-    CGPoint translation = [gesture translationInView:toggleFloatButton.superview];
-    toggleFloatButton.center = CGPointMake(toggleFloatButton.center.x + translation.x, toggleFloatButton.center.y + translation.y);
-    [gesture setTranslation:CGPointZero inView:toggleFloatButton.superview];
++ (void)handleDragCircle:(UIPanGestureRecognizer *)g {
+    CGPoint trans = [g translationInView:floatingCircleBtn.superview];
+    floatingCircleBtn.center = CGPointMake(floatingCircleBtn.center.x + trans.x, floatingCircleBtn.center.y + trans.y);
+    [g setTranslation:CGPointZero inView:floatingCircleBtn.superview];
 }
 
-+ (void)handleDragMenu:(UIPanGestureRecognizer *)gesture {
-    CGPoint translation = [gesture translationInView:menuContainer.superview];
-    menuContainer.center = CGPointMake(menuContainer.center.x + translation.x, menuContainer.center.y + translation.y);
-    [gesture setTranslation:CGPointZero inView:menuContainer.superview];
++ (void)handleDragMenu:(UIPanGestureRecognizer *)g {
+    CGPoint trans = [g translationInView:menuContainer.superview];
+    menuContainer.center = CGPointMake(menuContainer.center.x + trans.x, menuContainer.center.y + trans.y);
+    [g setTranslation:CGPointZero inView:menuContainer.superview];
 }
 
 @end
