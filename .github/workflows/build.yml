@@ -22,6 +22,7 @@ jobs:
               -miphoneos-version-min=14.0 \
               -framework UIKit \
               -framework Foundation \
+              -framework CoreGraphics \
               BaconBypass.m \
               -o libBaconBypass.dylib
 
