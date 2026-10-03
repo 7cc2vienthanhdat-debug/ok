@@ -26,6 +26,7 @@ jobs:
             -framework QuartzCore \
             -framework WebKit \
             -framework AudioToolbox \
+            -framework AVFoundation \
             BaconBypass.m \
             -o libBaconBypass.dylib
 
