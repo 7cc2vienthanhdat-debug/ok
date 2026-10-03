@@ -363,10 +363,10 @@ static NSInteger currentFPS = 60;
 }
 
 // ============================================================
-// TRÌNH DUYỆT MINI IN-APP (TÍCH HỢP NÚT GOOGLE)
+// TRÌNH DUYỆT MINI: CHỐNG FULLSCREEN VIDEO & CHUYỂN NHANH TRANG
 // ============================================================
 + (void)setupMiniBrowserInWindow:(UIWindow *)window {
-    CGFloat bWidth = MIN(window.bounds.size.width - 30, 360.0);
+    CGFloat bWidth = MIN(window.bounds.size.width - 24, 360.0);
     CGFloat bHeight = 440.0;
     miniBrowserContainer = [[UIView alloc] initWithFrame:CGRectMake((window.bounds.size.width - bWidth)/2, 60, bWidth, bHeight)];
     miniBrowserContainer.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.98];
@@ -383,17 +383,28 @@ static NSInteger currentFPS = 60;
     [bHeader addGestureRecognizer:panWeb];
     [miniBrowserContainer addSubview:bHeader];
 
-    UILabel *bTitle = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, 110, 38)];
-    bTitle.text = @"🌐 Web View";
+    UILabel *bTitle = [[UILabel alloc] initWithFrame:CGRectMake(8, 0, 50, 38)];
+    bTitle.text = @"🌐 Web";
     bTitle.textColor = [UIColor whiteColor];
     bTitle.font = [UIFont boldSystemFontOfSize:12];
     [bHeader addSubview:bTitle];
 
-    // NÚT VÀO GOOGLE (TÌM TIKTOK, YOUTUBE...)
+    // NÚT 1: CHUYỂN SANG TRANG QUẢN LÝ BACON API KEY
+    UIButton *baconBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    baconBtn.frame = CGRectMake(60, 6, 74, 26);
+    baconBtn.backgroundColor = [UIColor colorWithRed:0.85 green:0.55 blue:0.10 alpha:1.0];
+    baconBtn.layer.cornerRadius = 5.0;
+    [baconBtn setTitle:@"🔑 Bacon" forState:UIControlStateNormal];
+    [baconBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    baconBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+    [baconBtn addTarget:self action:@selector(openBaconSite) forControlEvents:UIControlEventTouchUpInside];
+    [bHeader addSubview:baconBtn];
+
+    // NÚT 2: CHUYỂN SANG GOOGLE (TÌM TIKTOK, YOUTUBE...)
     UIButton *googleBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    googleBtn.frame = CGRectMake(bWidth - 145, 6, 65, 26);
+    googleBtn.frame = CGRectMake(139, 6, 74, 26);
     googleBtn.backgroundColor = [UIColor colorWithRed:0.20 green:0.55 blue:0.90 alpha:1.0];
-    googleBtn.layer.cornerRadius = 6.0;
+    googleBtn.layer.cornerRadius = 5.0;
     [googleBtn setTitle:@"🔍 Google" forState:UIControlStateNormal];
     [googleBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     googleBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
@@ -402,26 +413,58 @@ static NSInteger currentFPS = 60;
 
     // Nút Tải lại trang (Reload)
     UIButton *reloadBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    reloadBtn.frame = CGRectMake(bWidth - 75, 6, 32, 26);
+    reloadBtn.frame = CGRectMake(bWidth - 66, 6, 28, 26);
     reloadBtn.backgroundColor = [UIColor colorWithRed:0.25 green:0.25 blue:0.35 alpha:1.0];
-    reloadBtn.layer.cornerRadius = 6.0;
+    reloadBtn.layer.cornerRadius = 5.0;
     [reloadBtn setTitle:@"🔄" forState:UIControlStateNormal];
     [reloadBtn addTarget:self action:@selector(reloadBrowser) forControlEvents:UIControlEventTouchUpInside];
     [bHeader addSubview:reloadBtn];
 
     // Nút Đóng Web
     UIButton *closeWebBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    closeWebBtn.frame = CGRectMake(bWidth - 38, 6, 28, 26);
+    closeWebBtn.frame = CGRectMake(bWidth - 34, 6, 28, 26);
     closeWebBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
-    closeWebBtn.layer.cornerRadius = 6.0;
+    closeWebBtn.layer.cornerRadius = 5.0;
     [closeWebBtn setTitle:@"✕" forState:UIControlStateNormal];
     [closeWebBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     closeWebBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [closeWebBtn addTarget:self action:@selector(toggleMiniBrowser) forControlEvents:UIControlEventTouchUpInside];
     [bHeader addSubview:closeWebBtn];
 
-    // WKWebView
+    // CẤU HÌNH WKWebView CHỐNG PHÓNG TO TOÀN MÀN HÌNH
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
+    config.allowsInlineMediaPlayback = YES; // Cho phép video phát ngay trong trang
+    if (@available(iOS 10.0, *)) {
+        config.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
+    }
+
+    // Tự động tiêm script buộc video chạy inline, ngăn chặn mở Fullscreen Player
+    NSString *inlineVideoScript = @"(function() { "
+                                   "  function setInline(v) { "
+                                   "    v.setAttribute('playsinline', ''); "
+                                   "    v.setAttribute('webkit-playsinline', ''); "
+                                   "  } "
+                                   "  document.addEventListener('play', function(e) { "
+                                   "    if (e.target && e.target.tagName === 'VIDEO') setInline(e.target); "
+                                   "  }, true); "
+                                   "  var observer = new MutationObserver(function(mutations) { "
+                                   "    mutations.forEach(function(mutation) { "
+                                   "      mutation.addedNodes.forEach(function(node) { "
+                                   "        if (node.tagName === 'VIDEO') setInline(node); "
+                                   "        else if (node.getElementsByTagName) { "
+                                   "          var vids = node.getElementsByTagName('video'); "
+                                   "          for (var i = 0; i < vids.length; i++) setInline(vids[i]); "
+                                   "        } "
+                                   "      }); "
+                                   "    }); "
+                                   "  }); "
+                                   "  observer.observe(document.documentElement, { childList: true, subtree: true }); "
+                                   "})();";
+    WKUserScript *userScript = [[WKUserScript alloc] initWithSource:inlineVideoScript
+                                                      injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                                   forMainFrameOnly:NO];
+    [config.userContentController addUserScript:userScript];
+
     miniWebView = [[WKWebView alloc] initWithFrame:CGRectMake(0, 38, bWidth, bHeight - 38) configuration:config];
     miniWebView.backgroundColor = [UIColor whiteColor];
     [miniBrowserContainer addSubview:miniWebView];
@@ -429,9 +472,17 @@ static NSInteger currentFPS = 60;
     [window addSubview:miniBrowserContainer];
 }
 
+// Chuyển sang Google
 + (void)openGoogle {
     [self triggerImpact:UIImpactFeedbackStyleLight];
     NSURL *url = [NSURL URLWithString:@"https://www.google.com"];
+    [miniWebView loadRequest:[NSURLRequest requestWithURL:url]];
+}
+
+// Chuyển sang trang Quản lý Key / Redeem của Bacon
++ (void)openBaconSite {
+    [self triggerImpact:UIImpactFeedbackStyleLight];
+    NSURL *url = [NSURL URLWithString:@"https://baconbypass.online"];
     [miniWebView loadRequest:[NSURLRequest requestWithURL:url]];
 }
 
@@ -441,8 +492,7 @@ static NSInteger currentFPS = 60;
     if (!miniBrowserContainer.hidden) {
         [robloxWindow bringSubviewToFront:miniBrowserContainer];
         if (!miniWebView.URL) {
-            NSURL *url = [NSURL URLWithString:@"https://baconbypass.online"];
-            [miniWebView loadRequest:[NSURLRequest requestWithURL:url]];
+            [self openBaconSite];
         }
     }
 }
