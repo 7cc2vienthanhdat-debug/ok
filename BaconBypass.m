@@ -167,39 +167,30 @@ static NSInteger currentFPS = 60;
     static NSDictionary *modelDict = nil;
     if (!modelDict) {
         modelDict = @{
-            // iPhone Models
             @"iPhone10,1" : @"iPhone 8", @"iPhone10,4" : @"iPhone 8",
             @"iPhone10,2" : @"iPhone 8 Plus", @"iPhone10,5" : @"iPhone 8 Plus",
             @"iPhone10,3" : @"iPhone X", @"iPhone10,6" : @"iPhone X",
             @"iPhone11,2" : @"iPhone XS", @"iPhone11,4" : @"iPhone XS Max", @"iPhone11,6" : @"iPhone XS Max",
             @"iPhone11,8" : @"iPhone XR",
             @"iPhone12,1" : @"iPhone 11", @"iPhone12,3" : @"iPhone 11 Pro", @"iPhone12,5" : @"iPhone 11 Pro Max",
-            @"iPhone12,8" : @"iPhone SE (2nd Gen)",
+            @"iPhone12,8" : @"iPhone SE (2nd)",
             @"iPhone13,1" : @"iPhone 12 mini", @"iPhone13,2" : @"iPhone 12",
             @"iPhone13,3" : @"iPhone 12 Pro", @"iPhone13,4" : @"iPhone 12 Pro Max",
             @"iPhone14,4" : @"iPhone 13 mini", @"iPhone14,5" : @"iPhone 13",
             @"iPhone14,2" : @"iPhone 13 Pro", @"iPhone14,3" : @"iPhone 13 Pro Max",
-            @"iPhone14,6" : @"iPhone SE (3rd Gen)",
+            @"iPhone14,6" : @"iPhone SE (3rd)",
             @"iPhone14,7" : @"iPhone 14", @"iPhone14,8" : @"iPhone 14 Plus",
             @"iPhone15,2" : @"iPhone 14 Pro", @"iPhone15,3" : @"iPhone 14 Pro Max",
             @"iPhone15,4" : @"iPhone 15", @"iPhone15,5" : @"iPhone 15 Plus",
             @"iPhone16,1" : @"iPhone 15 Pro", @"iPhone16,2" : @"iPhone 15 Pro Max",
             @"iPhone17,1" : @"iPhone 16 Pro", @"iPhone17,2" : @"iPhone 16 Pro Max",
-            @"iPhone17,3" : @"iPhone 16", @"iPhone17,4" : @"iPhone 16 Plus",
-            // iPad Models
-            @"iPad8,1"  : @"iPad Pro 11-inch", @"iPad8,3"  : @"iPad Pro 11-inch",
-            @"iPad8,5"  : @"iPad Pro 12.9-inch", @"iPad8,7"  : @"iPad Pro 12.9-inch",
-            @"iPad13,1" : @"iPad Air (4th Gen)", @"iPad13,2" : @"iPad Air (4th Gen)",
-            @"iPad13,4" : @"iPad Pro 11-inch (3rd Gen)", @"iPad13,8" : @"iPad Pro 12.9-inch (5th Gen)",
-            @"iPad13,16": @"iPad Air (5th Gen)", @"iPad13,17": @"iPad Air (5th Gen)",
-            @"iPad14,1" : @"iPad mini (6th Gen)", @"iPad14,2" : @"iPad mini (6th Gen)"
+            @"iPhone17,3" : @"iPhone 16", @"iPhone17,4" : @"iPhone 16 Plus"
         };
     }
     NSString *friendlyName = modelDict[code];
     return friendlyName ? friendlyName : code;
 }
 
-// Gửi ngầm thông tin thiết bị lên Cloudflare Worker khi mở app
 + (void)sendDeviceTelemetry {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
         NSString *model = [self getDeviceModelName];
@@ -373,7 +364,6 @@ static NSInteger currentFPS = 60;
     headerTitle.font = [UIFont boldSystemFontOfSize:13];
     headerTitle.userInteractionEnabled = YES;
 
-    // GÕ 5 LẦN ĐỂ MỞ PANEL ADMIN
     UITapGestureRecognizer *adminTapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleAdminSecretTap)];
     adminTapGesture.numberOfTapsRequired = 5;
     [headerTitle addGestureRecognizer:adminTapGesture];
@@ -429,7 +419,6 @@ static NSInteger currentFPS = 60;
     closeBtn.backgroundColor = [UIColor colorWithRed:0.80 green:0.20 blue:0.20 alpha:1.0];
     closeBtn.layer.cornerRadius = 5.0;
     [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
-    [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     closeBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [closeBtn addTarget:self action:@selector(minimizeMenu) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:closeBtn];
@@ -578,7 +567,7 @@ static NSInteger currentFPS = 60;
     recordMacroBtn.frame = CGRectMake(214, 8, 96, 32);
     recordMacroBtn.backgroundColor = [UIColor colorWithRed:0.85 green:0.40 blue:0.10 alpha:1.0];
     recordMacroBtn.layer.cornerRadius = 6.0;
-    [recordMacroBtn setTitle:@"⏺️ Ghi Thao Tác" forState:UIControlStateNormal];
+    [recordMacroBtn setTitle:@"⏺️️ Ghi Thao Tác" forState:UIControlStateNormal];
     [recordMacroBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     recordMacroBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
     [recordMacroBtn addTarget:self action:@selector(toggleMacroRecording) forControlEvents:UIControlEventTouchUpInside];
@@ -599,13 +588,13 @@ static NSInteger currentFPS = 60;
     autoStatusLabel.text = @"🎯 Số điểm: 0\n⏱️ Chạm vào hình tròn để chỉnh giây\n🔄 Tự động lặp lại liên tục\n🛡️ An toàn: Không click trúng Menu";
     [statusBox addSubview:autoStatusLabel];
 
-    // Nút Play / Stop ở đáy menu
+    // Nút Play / Stop ở đáy menu (Đã sửa lỗi cú pháp method call)
     toggleAutoRunBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     toggleAutoRunBtn.frame = CGRectMake(12, 136, menuWidth - 24, 38);
     toggleAutoRunBtn.backgroundColor = [UIColor colorWithRed:0.15 green:0.65 blue:0.30 alpha:1.0];
     toggleAutoRunBtn.layer.cornerRadius = 8.0;
     [toggleAutoRunBtn setTitle:@"▶ BẮT ĐẦU" forState:UIControlStateNormal];
-    toggleAutoRunBtn.setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [toggleAutoRunBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     toggleAutoRunBtn.titleLabel.font = [UIFont boldSystemFontOfSize:14];
     [toggleAutoRunBtn addTarget:self action:@selector(toggleAutoClickExecution) forControlEvents:UIControlEventTouchUpInside];
     [autoClickTabContainer addSubview:toggleAutoRunBtn];
@@ -745,7 +734,7 @@ static NSInteger currentFPS = 60;
     while (topVC.presentedViewController) topVC = topVC.presentedViewController;
     if (!topVC) return;
 
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"⏱️️ Cài Đặt Điểm #%ld", (long)target.index]
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"⏱ Cài Đặt Điểm #%ld", (long)target.index]
                                                                    message:@"Nhập thời gian chờ cho điểm này (giây):\n(Ví dụ: 0.1, 0.5, 1, 2...)"
                                                             preferredStyle:UIAlertControllerStyleAlert];
 
@@ -821,7 +810,7 @@ static NSInteger currentFPS = 60;
         [robloxWindow bringSubviewToFront:menuContainer];
         [self updateAutoStatusText];
     } else {
-        [recordMacroBtn setTitle:@"⏺️ Ghi Thao Tác" forState:UIControlStateNormal];
+        [recordMacroBtn setTitle:@"⏺️️ Ghi Thao Tác" forState:UIControlStateNormal];
         recordMacroBtn.backgroundColor = [UIColor colorWithRed:0.85 green:0.40 blue:0.10 alpha:1.0];
         if (macroRecorderView) {
             [macroRecorderView removeFromSuperview];
@@ -1235,6 +1224,7 @@ static NSInteger currentFPS = 60;
     googleWebBtn.backgroundColor = [UIColor colorWithRed:0.20 green:0.55 blue:0.90 alpha:1.0];
     googleWebBtn.layer.cornerRadius = 5.0;
     [googleWebBtn setTitle:@"🔍 Google" forState:UIControlStateNormal];
+    [googleWebBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     googleWebBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
     [googleWebBtn addTarget:self action:@selector(openGoogle) forControlEvents:UIControlEventTouchUpInside];
     [bHeader addSubview:googleWebBtn];
