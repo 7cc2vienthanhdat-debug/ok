@@ -4,6 +4,7 @@
 #import <sys/utsname.h>
 #import <mach/mach.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <AVFoundation/AVFoundation.h>
 
 @interface BaconBypassOverlay : NSObject <WKNavigationDelegate>
 + (void)load;
@@ -57,6 +58,10 @@ static UIView *utilsTabContainer = nil;
 static UITextView *utilsResultDisplay = nil;
 static UIView *crosshairContainer = nil;
 static UIView *afkOverlay = nil;
+static UIButton *btnBackground = nil;
+static BOOL isBackgroundRunning = NO;
+static AVAudioPlayer *silentAudioPlayer = nil;
+static UIBackgroundTaskIdentifier bgTaskIdentifier = UIBackgroundTaskInvalid;
 
 // --- Trạng thái Admin & Killswitch ---
 static BOOL isAdminMode = NO;
@@ -99,7 +104,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 }
 
 // ============================================================
-// BẮT LINK TỰ ĐỘNG TỪ BỘ NHỚ TẠM (HÀM BỊ THIẾU ĐÃ ĐƯỢC THÊM LẠI)
+// BẮT LINK TỰ ĐỘNG TỪ BỘ NHỚ TẠM
 // ============================================================
 + (void)autoDetectClipboardLink {
     UIPasteboard *board = [UIPasteboard generalPasteboard];
@@ -113,6 +118,100 @@ static NSString *currentThermalStatus = @"❄️ Mát";
                 resultDisplay.textColor = [UIColor colorWithRed:0.4 green:0.8 blue:1.0 alpha:1.0];
             }
         }
+    }
+}
+
+// ============================================================
+// TÍNH NĂNG CHẠY NGẦM (BACKGROUND EXECUTION)
+// ============================================================
++ (NSData *)generateSilentWavData {
+    NSMutableData *data = [NSMutableData data];
+    int sampleRate = 44100;
+    short channels = 1;
+    short bitsPerSample = 16;
+    int numSamples = sampleRate / 2; // 0.5 giây
+    int dataSize = numSamples * channels * (bitsPerSample / 8);
+    int chunkSize = 36 + dataSize;
+    int byteRate = sampleRate * channels * (bitsPerSample / 8);
+    short blockAlign = channels * (bitsPerSample / 8);
+
+    [data appendBytes:"RIFF" length:4];
+    [data appendBytes:&chunkSize length:4];
+    [data appendBytes:"WAVEfmt " length:8];
+    int subchunk1Size = 16;
+    short audioFormat = 1;
+    [data appendBytes:&subchunk1Size length:4];
+    [data appendBytes:&audioFormat length:2];
+    [data appendBytes:&channels length:2];
+    [data appendBytes:&sampleRate length:4];
+    [data appendBytes:&byteRate length:4];
+    [data appendBytes:&blockAlign length:2];
+    [data appendBytes:&bitsPerSample length:2];
+    [data appendBytes:"data" length:4];
+    [data appendBytes:&dataSize length:4];
+    void *silence = calloc(numSamples, blockAlign);
+    [data appendBytes:silence length:dataSize];
+    free(silence);
+    return data;
+}
+
++ (void)startBackgroundAudio {
+    NSError *error = nil;
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    [session setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:&error];
+    [session setActive:YES error:&error];
+
+    if (!silentAudioPlayer) {
+        NSData *silentData = [self generateSilentWavData];
+        silentAudioPlayer = [[AVAudioPlayer alloc] initWithData:silentData error:&error];
+        silentAudioPlayer.numberOfLoops = -1; // Vòng lặp vô tận
+        silentAudioPlayer.volume = 0.01;      // Âm lượng tối thiểu tuyệt đối
+        [silentAudioPlayer prepareToPlay];
+    }
+    [silentAudioPlayer play];
+
+    if (bgTaskIdentifier == UIBackgroundTaskInvalid) {
+        bgTaskIdentifier = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
+            [[UIApplication sharedApplication] endBackgroundTask:bgTaskIdentifier];
+            bgTaskIdentifier = UIBackgroundTaskInvalid;
+        }];
+    }
+}
+
++ (void)stopBackgroundAudio {
+    if (silentAudioPlayer) {
+        [silentAudioPlayer stop];
+        silentAudioPlayer = nil;
+    }
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    [session setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:nil];
+
+    if (bgTaskIdentifier != UIBackgroundTaskInvalid) {
+        [[UIApplication sharedApplication] endBackgroundTask:bgTaskIdentifier];
+        bgTaskIdentifier = UIBackgroundTaskInvalid;
+    }
+}
+
++ (void)toggleBackgroundExecution {
+    [self triggerImpact:UIImpactFeedbackStyleHeavy];
+    isBackgroundRunning = !isBackgroundRunning;
+
+    if (isBackgroundRunning) {
+        [self startBackgroundAudio];
+        [btnBackground setTitle:@"⚡ Chạy Ngầm: BẬT" forState:UIControlStateNormal];
+        btnBackground.backgroundColor = [[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0] colorWithAlphaComponent:0.35];
+        btnBackground.layer.borderColor = [UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0].CGColor;
+        [self triggerNotify:UINotificationFeedbackTypeSuccess];
+        utilsResultDisplay.text = @"⚡ Đã KÍCH HOẠT chạy ngầm! Bạn có thể chuyển sang app khác mà game không bao giờ mất kết nối.";
+        utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
+    } else {
+        [self stopBackgroundAudio];
+        [btnBackground setTitle:@"⚡ Chạy Ngầm: TẮT" forState:UIControlStateNormal];
+        btnBackground.backgroundColor = [[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0] colorWithAlphaComponent:0.25];
+        btnBackground.layer.borderColor = [[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0] colorWithAlphaComponent:0.6].CGColor;
+        [self triggerNotify:UINotificationFeedbackTypeWarning];
+        utilsResultDisplay.text = @"⏹️ Đã dừng chế độ chạy ngầm.";
+        utilsResultDisplay.textColor = [UIColor colorWithWhite:0.7 alpha:1.0];
     }
 }
 
@@ -301,7 +400,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 }
 
 // ============================================================
-// HÀM TIỆN ÍCH MỚI (CROSSHAIR, AFK, RAM CLEANER)
+// HÀM TIỆN ÍCH (CROSSHAIR, AFK, RAM CLEANER)
 // ============================================================
 + (void)toggleCrosshair {
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
@@ -377,11 +476,8 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 
 + (void)cleanRAM {
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
-    
-    // Clear URL & Data Cache
     [[NSURLCache sharedURLCache] removeAllCachedResponses];
     
-    // Ép iOS chạy lệnh Low Memory Warning nội bộ để giải phóng RAM
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wundeclared-selector"
     if ([[UIApplication sharedApplication] respondsToSelector:@selector(_performMemoryWarning)]) {
@@ -610,32 +706,40 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [resultBox addSubview:resultDisplay];
 
     // ==========================================
-    // KHUNG TAB 2: TIỆN ÍCH
+    // KHUNG TAB 2: TIỆN ÍCH (GỒM NÚT CHẠY NGẦM)
     // ==========================================
     utilsTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, bodyY, menuWidth, menuHeight - bodyY)];
     utilsTabContainer.hidden = YES;
     [menuContainer addSubview:utilsTabContainer];
 
-    UIButton *btnCrosshair = [self createGlassButtonWithFrame:CGRectMake(16, 8, menuWidth - 32, 40) title:@"🎯 Bật / Tắt Tâm Ngắm Ảo" color:[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0]];
+    CGFloat halfBtnW = (menuWidth - 40) / 2;
+
+    // Hàng 1: Tâm ngắm & Chạy ngầm
+    UIButton *btnCrosshair = [self createGlassButtonWithFrame:CGRectMake(16, 8, halfBtnW, 38) title:@"🎯 Tâm Ngắm" color:[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0]];
     [btnCrosshair addTarget:self action:@selector(toggleCrosshair) forControlEvents:UIControlEventTouchUpInside];
     [utilsTabContainer addSubview:btnCrosshair];
 
-    UIButton *btnAFK = [self createGlassButtonWithFrame:CGRectMake(16, 56, (menuWidth - 40) / 2, 42) title:@"🌙 Màn Hình AFK" color:[UIColor colorWithRed:0.6 green:0.4 blue:0.9 alpha:1.0]];
+    btnBackground = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(btnCrosshair.frame) + 8, 8, halfBtnW, 38) title:@"⚡ Chạy Ngầm: TẮT" color:[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0]];
+    [btnBackground addTarget:self action:@selector(toggleBackgroundExecution) forControlEvents:UIControlEventTouchUpInside];
+    [utilsTabContainer addSubview:btnBackground];
+
+    // Hàng 2: AFK & Dọn RAM
+    UIButton *btnAFK = [self createGlassButtonWithFrame:CGRectMake(16, 52, halfBtnW, 38) title:@"🌙 Màn Hình AFK" color:[UIColor colorWithRed:0.6 green:0.4 blue:0.9 alpha:1.0]];
     [btnAFK addTarget:self action:@selector(toggleAFKMode) forControlEvents:UIControlEventTouchUpInside];
     [utilsTabContainer addSubview:btnAFK];
 
-    UIButton *btnRAM = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(btnAFK.frame) + 8, 56, (menuWidth - 40) / 2, 42) title:@"🧹 Dọn Rác (RAM)" color:[UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0]];
+    UIButton *btnRAM = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(btnAFK.frame) + 8, 52, halfBtnW, 38) title:@"🧹 Dọn Rác RAM" color:[UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0]];
     [btnRAM addTarget:self action:@selector(cleanRAM) forControlEvents:UIControlEventTouchUpInside];
     [utilsTabContainer addSubview:btnRAM];
 
-    UIView *uResultBox = [[UIView alloc] initWithFrame:CGRectMake(16, 108, menuWidth - 32, 50)];
+    UIView *uResultBox = [[UIView alloc] initWithFrame:CGRectMake(16, 96, menuWidth - 32, 60)];
     uResultBox.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.25];
     uResultBox.layer.cornerRadius = 10.0;
     uResultBox.layer.borderWidth = 1.0;
     uResultBox.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
     [utilsTabContainer addSubview:uResultBox];
 
-    utilsResultDisplay = [[UITextView alloc] initWithFrame:CGRectMake(8, 4, menuWidth - 48, 42)];
+    utilsResultDisplay = [[UITextView alloc] initWithFrame:CGRectMake(8, 4, menuWidth - 48, 52)];
     utilsResultDisplay.text = @"Chọn một tiện ích bên trên để sử dụng...";
     utilsResultDisplay.textColor = [UIColor colorWithWhite:0.7 alpha:1.0];
     utilsResultDisplay.font = [UIFont systemFontOfSize:11];
@@ -828,7 +932,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     closeDBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
     closeDBtn.layer.cornerRadius = 5.0;
     [closeDBtn setTitle:@"✕" forState:UIControlStateNormal];
-    [closeDBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     closeDBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [closeDBtn addTarget:self action:@selector(toggleDeviceLogs) forControlEvents:UIControlEventTouchUpInside];
     [dHeader addSubview:closeDBtn];
@@ -999,7 +1102,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     googleWebBtn.backgroundColor = [UIColor colorWithRed:0.20 green:0.55 blue:0.90 alpha:1.0];
     googleWebBtn.layer.cornerRadius = 5.0;
     [googleWebBtn setTitle:@"🔍 Google" forState:UIControlStateNormal];
-    [googleWebBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     googleWebBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
     [googleWebBtn addTarget:self action:@selector(openGoogle) forControlEvents:UIControlEventTouchUpInside];
     [bHeader addSubview:googleWebBtn];
