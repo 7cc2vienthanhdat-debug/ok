@@ -105,13 +105,11 @@ static NSInteger currentFPS = 60;
 }
 
 + (void)onRenderFrame:(CADisplayLink *)link {
-    // Hiệu ứng viền chuyển màu cầu vồng (RGB Glow)
     currentHue += 0.006;
     if (currentHue > 1.0) currentHue = 0.0;
     UIColor *rainbowColor = [UIColor colorWithHue:currentHue saturation:0.95 brightness:1.0 alpha:1.0];
     floatingCircleBtn.layer.borderColor = rainbowColor.CGColor;
 
-    // Đo FPS
     frameCount++;
     if (lastFpsTime == 0) lastFpsTime = link.timestamp;
     CFTimeInterval delta = link.timestamp - lastFpsTime;
@@ -365,7 +363,7 @@ static NSInteger currentFPS = 60;
 }
 
 // ============================================================
-// TRÌNH DUYỆT MINI IN-APP
+// TRÌNH DUYỆT MINI IN-APP (TÍCH HỢP NÚT GOOGLE)
 // ============================================================
 + (void)setupMiniBrowserInWindow:(UIWindow *)window {
     CGFloat bWidth = MIN(window.bounds.size.width - 30, 360.0);
@@ -378,18 +376,31 @@ static NSInteger currentFPS = 60;
     miniBrowserContainer.clipsToBounds = YES;
     miniBrowserContainer.hidden = YES;
 
+    // Header Browser
     UIView *bHeader = [[UIView alloc] initWithFrame:CGRectMake(0, 0, bWidth, 38)];
     bHeader.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.18 alpha:1.0];
     UIPanGestureRecognizer *panWeb = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragBrowser:)];
     [bHeader addGestureRecognizer:panWeb];
     [miniBrowserContainer addSubview:bHeader];
 
-    UILabel *bTitle = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, 160, 38)];
-    bTitle.text = @"🌐 Bacon Web Browser";
+    UILabel *bTitle = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, 110, 38)];
+    bTitle.text = @"🌐 Web View";
     bTitle.textColor = [UIColor whiteColor];
     bTitle.font = [UIFont boldSystemFontOfSize:12];
     [bHeader addSubview:bTitle];
 
+    // NÚT VÀO GOOGLE (TÌM TIKTOK, YOUTUBE...)
+    UIButton *googleBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    googleBtn.frame = CGRectMake(bWidth - 145, 6, 65, 26);
+    googleBtn.backgroundColor = [UIColor colorWithRed:0.20 green:0.55 blue:0.90 alpha:1.0];
+    googleBtn.layer.cornerRadius = 6.0;
+    [googleBtn setTitle:@"🔍 Google" forState:UIControlStateNormal];
+    [googleBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    googleBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+    [googleBtn addTarget:self action:@selector(openGoogle) forControlEvents:UIControlEventTouchUpInside];
+    [bHeader addSubview:googleBtn];
+
+    // Nút Tải lại trang (Reload)
     UIButton *reloadBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     reloadBtn.frame = CGRectMake(bWidth - 75, 6, 32, 26);
     reloadBtn.backgroundColor = [UIColor colorWithRed:0.25 green:0.25 blue:0.35 alpha:1.0];
@@ -398,6 +409,7 @@ static NSInteger currentFPS = 60;
     [reloadBtn addTarget:self action:@selector(reloadBrowser) forControlEvents:UIControlEventTouchUpInside];
     [bHeader addSubview:reloadBtn];
 
+    // Nút Đóng Web
     UIButton *closeWebBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     closeWebBtn.frame = CGRectMake(bWidth - 38, 6, 28, 26);
     closeWebBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
@@ -408,12 +420,19 @@ static NSInteger currentFPS = 60;
     [closeWebBtn addTarget:self action:@selector(toggleMiniBrowser) forControlEvents:UIControlEventTouchUpInside];
     [bHeader addSubview:closeWebBtn];
 
+    // WKWebView
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     miniWebView = [[WKWebView alloc] initWithFrame:CGRectMake(0, 38, bWidth, bHeight - 38) configuration:config];
     miniWebView.backgroundColor = [UIColor whiteColor];
     [miniBrowserContainer addSubview:miniWebView];
 
     [window addSubview:miniBrowserContainer];
+}
+
++ (void)openGoogle {
+    [self triggerImpact:UIImpactFeedbackStyleLight];
+    NSURL *url = [NSURL URLWithString:@"https://www.google.com"];
+    [miniWebView loadRequest:[NSURLRequest requestWithURL:url]];
 }
 
 + (void)toggleMiniBrowser {
