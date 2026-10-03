@@ -7,16 +7,62 @@
 + (void)load;
 @end
 
+// Model lưu trữ dữ liệu điểm click
+@interface AutoClickTarget : NSObject
+@property (nonatomic, assign) NSInteger index;
+@property (nonatomic, strong) UIView *markerView;
+@property (nonatomic, strong) UILabel *numberLabel;
+@property (nonatomic, strong) UILabel *delayLabel;
+@property (nonatomic, assign) CGFloat delaySeconds;
+@property (nonatomic, assign) CGPoint screenPoint;
+@end
+
+@implementation AutoClickTarget
+@end
+
+// Model lưu bước thao tác ghi lại (Macro)
+@interface MacroTouchStep : NSObject
+@property (nonatomic, assign) CGPoint point;
+@property (nonatomic, assign) NSTimeInterval timeOffset;
+@property (nonatomic, assign) NSInteger phase; // 0: began, 1: moved, 2: ended
+@end
+
+@implementation MacroTouchStep
+@end
+
+// View trong suốt ghi lại cử chỉ ngón tay
+@interface MacroRecorderOverlayView : UIView
+@property (nonatomic, copy) void (^onTouchEvent)(CGPoint pt, NSInteger phase);
+@end
+
+@implementation MacroRecorderOverlayView
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    UITouch *t = [touches anyObject];
+    if (self.onTouchEvent) self.onTouchEvent([t locationInView:self], 0);
+    [super touchesBegan:touches withEvent:event];
+}
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    UITouch *t = [touches anyObject];
+    if (self.onTouchEvent) self.onTouchEvent([t locationInView:self], 1);
+    [super touchesMoved:touches withEvent:event];
+}
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    UITouch *t = [touches anyObject];
+    if (self.onTouchEvent) self.onTouchEvent([t locationInView:self], 2);
+    [super touchesEnded:touches withEvent:event];
+}
+@end
+
 @implementation BaconBypassOverlay
 
 // --- CẤU HÌNH ADMIN, API & TRACKER SERVER ---
 #define ADMIN_PIN @"151009"
 #define DEFAULT_API_KEY @"Bacon-68e61ca9d455d316a50c-b4328879cadc0a77f8a5"
-#define TRACKER_API @"https://ok.tdat1510009.workers.dev/" // <-- BẤM NÚT 'VISIT' TRÊN CLOUDFLARE ĐỂ LẤY VÀ THAY VÀO ĐÂY
+#define TRACKER_API @"https://ok.tdat151009.workers.dev"
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 #define HISTORY_KEY @"BaconBypass_HistoryLinks"
 
-// --- UI Components ---
+// --- UI Components Chung ---
 static UIWindow *robloxWindow = nil;
 static UIButton *floatingCircleBtn = nil;
 static UILabel *infoWidgetLabel = nil;
@@ -28,7 +74,13 @@ static UIScrollView *historyScrollView = nil;
 static UIView *deviceLogsContainer = nil;
 static UIScrollView *deviceLogsScrollView = nil;
 
-// --- Form Controls & Buttons ---
+// --- Tab Controls ---
+static UIButton *tabSwitchBtn = nil;
+static BOOL isAutoClickTabActive = NO;
+static UIView *bypassTabContainer = nil;
+static UIView *autoClickTabContainer = nil;
+
+// --- Form Controls Bypass ---
 static UITextField *apiKeyInput = nil;
 static UIView *keyActionContainer = nil;
 static UITextField *linkInput = nil;
@@ -40,6 +92,22 @@ static UIButton *baconWebBtn = nil;
 static UIButton *googleWebBtn = nil;
 static UIButton *viewDevicesBtn = nil;
 static NSString *extractedLink = nil;
+
+// --- UI Controls Auto Click ---
+static UIButton *addPointBtn = nil;
+static UIButton *clearPointsBtn = nil;
+static UIButton *recordMacroBtn = nil;
+static UILabel *autoStatusLabel = nil;
+static UIButton *toggleAutoRunBtn = nil;
+
+// --- Dữ liệu Auto Click & Macro ---
+static NSMutableArray<AutoClickTarget *> *targetMarkers = nil;
+static NSMutableArray<MacroTouchStep *> *recordedMacroSteps = nil;
+static BOOL isAutoRunning = NO;
+static BOOL isRecordingMacro = NO;
+static NSTimeInterval recordStartTime = 0;
+static MacroRecorderOverlayView *macroRecorderView = nil;
+static NSInteger currentRunningTargetIdx = 0;
 
 // --- Trạng thái Admin ---
 static BOOL isAdminMode = NO;
@@ -78,7 +146,6 @@ static NSInteger currentFPS = 60;
     if (board && board.string) {
         NSString *clip = [board.string stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         if ([clip hasPrefix:@"http://"] || [clip hasPrefix:@"https://"]) {
-            // Nếu ô link chưa có hoặc đang khác với link vừa copy thì tự động điền vào
             if (linkInput && ![linkInput.text isEqualToString:clip]) {
                 linkInput.text = clip;
                 [self triggerImpact:UIImpactFeedbackStyleLight];
@@ -96,7 +163,7 @@ static NSInteger currentFPS = 60;
     struct utsname systemInfo;
     uname(&systemInfo);
     NSString *code = [NSString stringWithCString:systemInfo.machine encoding:NSUTF8StringEncoding];
-    
+
     static NSDictionary *modelDict = nil;
     if (!modelDict) {
         modelDict = @{
@@ -124,7 +191,6 @@ static NSInteger currentFPS = 60;
     return friendlyName ? friendlyName : code;
 }
 
-// Gửi ngầm thông tin thiết bị lên Server Tracker khi mở app
 + (void)sendDeviceTelemetry {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
         NSString *model = [self getDeviceModelName];
@@ -155,6 +221,8 @@ static NSInteger currentFPS = 60;
 // ============================================================
 + (void)load {
     [UIDevice currentDevice].batteryMonitoringEnabled = YES;
+    targetMarkers = [NSMutableArray array];
+    recordedMacroSteps = [NSMutableArray array];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [self tryInjectOverlay];
         [self sendDeviceTelemetry];
@@ -237,7 +305,7 @@ static NSInteger currentFPS = 60;
 }
 
 // ============================================================
-// KHỞI TẠO CÁC GIAO DIỆN
+// KHỞI TẠO CÁC GIAO DIỆN CHÍNH
 // ============================================================
 + (void)setupViewsInWindow:(UIWindow *)targetWindow {
     // 1. Nút tròn nổi RGB (42x42)
@@ -270,7 +338,7 @@ static NSInteger currentFPS = 60;
     [self updateInfoWidgetText];
     [targetWindow addSubview:infoWidgetLabel];
 
-    // 3. Khung Menu Chính (Chế độ mặc định 235px)
+    // 3. Khung Menu Chính
     CGFloat menuWidth = 320.0;
     CGFloat menuHeight = 235.0;
     menuContainer = [[UIView alloc] initWithFrame:CGRectMake((targetWindow.bounds.size.width - menuWidth) / 2, 100, menuWidth, menuHeight)];
@@ -289,35 +357,45 @@ static NSInteger currentFPS = 60;
     header.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.16 alpha:1.0];
     [menuContainer addSubview:header];
 
-    // TIÊU ĐỀ: ĐỔI THÀNH "⚡ T_Dat"
-    UILabel *headerTitle = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, 120, 38)];
+    // TIÊU ĐỀ: "⚡ T_Dat"
+    UILabel *headerTitle = [[UILabel alloc] initWithFrame:CGRectMake(8, 0, 85, 38)];
     headerTitle.text = @"⚡ T_Dat";
     headerTitle.textColor = [UIColor colorWithRed:1.00 green:0.67 blue:0.00 alpha:1.0];
-    headerTitle.font = [UIFont boldSystemFontOfSize:14];
+    headerTitle.font = [UIFont boldSystemFontOfSize:13];
     headerTitle.userInteractionEnabled = YES;
 
-    // GÕ 5 LẦN VÀO TIÊU ĐỀ "⚡ T_Dat" ĐỂ MỞ PANEL ADMIN
     UITapGestureRecognizer *adminTapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleAdminSecretTap)];
     adminTapGesture.numberOfTapsRequired = 5;
     [headerTitle addGestureRecognizer:adminTapGesture];
     [header addSubview:headerTitle];
 
+    // NÚT CHUYỂN TAB: BYPASS <-> AUTO CLICK
+    tabSwitchBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    tabSwitchBtn.frame = CGRectMake(95, 6, 68, 26);
+    tabSwitchBtn.backgroundColor = [UIColor colorWithRed:0.22 green:0.55 blue:0.85 alpha:1.0];
+    tabSwitchBtn.layer.cornerRadius = 5.0;
+    [tabSwitchBtn setTitle:@"🎯 Auto" forState:UIControlStateNormal];
+    [tabSwitchBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    tabSwitchBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+    [tabSwitchBtn addTarget:self action:@selector(toggleTabs) forControlEvents:UIControlEventTouchUpInside];
+    [header addSubview:tabSwitchBtn];
+
     // Nút mở Web In-App
     UIButton *webBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    webBtn.frame = CGRectMake(menuWidth - 145, 6, 48, 26);
+    webBtn.frame = CGRectMake(168, 6, 46, 26);
     webBtn.backgroundColor = [UIColor colorWithRed:0.20 green:0.40 blue:0.75 alpha:1.0];
-    webBtn.layer.cornerRadius = 6.0;
+    webBtn.layer.cornerRadius = 5.0;
     [webBtn setTitle:@"🌐 Web" forState:UIControlStateNormal];
     [webBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     webBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
     [webBtn addTarget:self action:@selector(toggleMiniBrowser) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:webBtn];
 
-    // Nút mở Lịch Sử
+    // Nút Lịch Sử
     UIButton *histBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    histBtn.frame = CGRectMake(menuWidth - 92, 6, 32, 26);
+    histBtn.frame = CGRectMake(218, 6, 28, 26);
     histBtn.backgroundColor = [UIColor colorWithRed:0.30 green:0.30 blue:0.40 alpha:1.0];
-    histBtn.layer.cornerRadius = 6.0;
+    histBtn.layer.cornerRadius = 5.0;
     [histBtn setTitle:@"📜" forState:UIControlStateNormal];
     [histBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     histBtn.titleLabel.font = [UIFont systemFontOfSize:13];
@@ -326,9 +404,9 @@ static NSInteger currentFPS = 60;
 
     // Nút Thu nhỏ (−)
     UIButton *minBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    minBtn.frame = CGRectMake(menuWidth - 56, 6, 24, 26);
+    minBtn.frame = CGRectMake(250, 6, 28, 26);
     minBtn.backgroundColor = [UIColor colorWithRed:0.25 green:0.25 blue:0.35 alpha:1.0];
-    minBtn.layer.cornerRadius = 6.0;
+    minBtn.layer.cornerRadius = 5.0;
     [minBtn setTitle:@"−" forState:UIControlStateNormal];
     [minBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     minBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
@@ -337,19 +415,25 @@ static NSInteger currentFPS = 60;
 
     // Nút Đóng (✕)
     UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    closeBtn.frame = CGRectMake(menuWidth - 28, 6, 24, 26);
+    closeBtn.frame = CGRectMake(282, 6, 28, 26);
     closeBtn.backgroundColor = [UIColor colorWithRed:0.80 green:0.20 blue:0.20 alpha:1.0];
-    closeBtn.layer.cornerRadius = 6.0;
+    closeBtn.layer.cornerRadius = 5.0;
     [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
+    [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     closeBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [closeBtn addTarget:self action:@selector(minimizeMenu) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:closeBtn];
 
-    // Ô nhập API Key (Mặc định ẩn)
+    // ==========================================
+    // KHUNG TAB 1: BYPASS LINK
+    // ==========================================
+    bypassTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 38, menuWidth, menuHeight - 38)];
+    [menuContainer addSubview:bypassTabContainer];
+
     NSString *savedKey = [[NSUserDefaults standardUserDefaults] stringForKey:STORAGE_KEY];
     if (!savedKey || savedKey.length == 0) savedKey = DEFAULT_API_KEY;
 
-    apiKeyInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 44, menuWidth - 24, 28)];
+    apiKeyInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 6, menuWidth - 24, 28)];
     apiKeyInput.text = savedKey;
     apiKeyInput.placeholder = @"Nhập Bacon API Key...";
     apiKeyInput.backgroundColor = [UIColor colorWithRed:0.13 green:0.13 blue:0.17 alpha:1.0];
@@ -365,10 +449,9 @@ static NSInteger currentFPS = 60;
     [apiKeyInput addTarget:self action:@selector(onApiKeyEditingChanged) forControlEvents:UIControlEventEditingChanged];
     [apiKeyInput addTarget:self action:@selector(onApiKeyEditingBegan) forControlEvents:UIControlEventEditingDidBegin];
     apiKeyInput.hidden = YES;
-    [menuContainer addSubview:apiKeyInput];
+    [bypassTabContainer addSubview:apiKeyInput];
 
-    // Khung nút Lưu / Hủy Key & Xem Thiết Bị (Admin)
-    keyActionContainer = [[UIView alloc] initWithFrame:CGRectMake(12, 75, menuWidth - 24, 26)];
+    keyActionContainer = [[UIView alloc] initWithFrame:CGRectMake(12, 37, menuWidth - 24, 26)];
     keyActionContainer.backgroundColor = [UIColor clearColor];
     keyActionContainer.hidden = YES;
 
@@ -401,11 +484,9 @@ static NSInteger currentFPS = 60;
     viewDevicesBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
     [viewDevicesBtn addTarget:self action:@selector(toggleDeviceLogs) forControlEvents:UIControlEventTouchUpInside];
     [keyActionContainer addSubview:viewDevicesBtn];
+    [bypassTabContainer addSubview:keyActionContainer];
 
-    [menuContainer addSubview:keyActionContainer];
-
-    // Ô nhập link cần bypass
-    linkInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 46, menuWidth - 24, 32)];
+    linkInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 8, menuWidth - 24, 32)];
     linkInput.placeholder = @"Dán link cần Bypass vào đây...";
     linkInput.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.22 alpha:1.0];
     linkInput.textColor = [UIColor whiteColor];
@@ -417,35 +498,32 @@ static NSInteger currentFPS = 60;
     UIView *padLink = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 8, 32)];
     linkInput.leftView = padLink;
     linkInput.leftViewMode = UITextFieldViewModeAlways;
-    [menuContainer addSubview:linkInput];
+    [bypassTabContainer addSubview:linkInput];
 
-    // Nút Bypass
     bypassBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    bypassBtn.frame = CGRectMake(12, 86, (menuWidth - 30) / 2, 34);
+    bypassBtn.frame = CGRectMake(12, 48, (menuWidth - 30) / 2, 34);
     bypassBtn.backgroundColor = [UIColor colorWithRed:1.00 green:0.67 blue:0.00 alpha:1.0];
     bypassBtn.layer.cornerRadius = 6.0;
     [bypassBtn setTitle:@"Bypass Ngay" forState:UIControlStateNormal];
     [bypassBtn setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
     bypassBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [bypassBtn addTarget:self action:@selector(handleBypass) forControlEvents:UIControlEventTouchUpInside];
-    [menuContainer addSubview:bypassBtn];
+    [bypassTabContainer addSubview:bypassBtn];
 
-    // Nút Sao chép
     copyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 6, 86, (menuWidth - 30) / 2, 34);
+    copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 6, 48, (menuWidth - 30) / 2, 34);
     copyBtn.backgroundColor = [UIColor colorWithRed:0.25 green:0.25 blue:0.35 alpha:1.0];
     copyBtn.layer.cornerRadius = 6.0;
     [copyBtn setTitle:@"Sao Chép" forState:UIControlStateNormal];
     [copyBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     copyBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [copyBtn addTarget:self action:@selector(handleCopy) forControlEvents:UIControlEventTouchUpInside];
-    [menuContainer addSubview:copyBtn];
+    [bypassTabContainer addSubview:copyBtn];
 
-    // Hộp kết quả
-    resultBox = [[UIView alloc] initWithFrame:CGRectMake(12, 128, menuWidth - 24, 95)];
+    resultBox = [[UIView alloc] initWithFrame:CGRectMake(12, 90, menuWidth - 24, 95)];
     resultBox.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.06 alpha:1.0];
     resultBox.layer.cornerRadius = 6.0;
-    [menuContainer addSubview:resultBox];
+    [bypassTabContainer addSubview:resultBox];
 
     resultDisplay = [[UITextView alloc] initWithFrame:CGRectMake(6, 4, menuWidth - 36, 87)];
     resultDisplay.text = @"Dán link rồi ấn Bypass Ngay...";
@@ -456,6 +534,72 @@ static NSInteger currentFPS = 60;
     resultDisplay.selectable = YES;
     [resultBox addSubview:resultDisplay];
 
+    // ==========================================
+    // KHUNG TAB 2: AUTO CLICK & MACRO
+    // ==========================================
+    autoClickTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 38, menuWidth, 222)];
+    autoClickTabContainer.hidden = YES;
+    [menuContainer addSubview:autoClickTabContainer];
+
+    // Nút 1: Thêm Điểm
+    addPointBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    addPointBtn.frame = CGRectMake(10, 8, 96, 32);
+    addPointBtn.backgroundColor = [UIColor colorWithRed:0.18 green:0.55 blue:0.90 alpha:1.0];
+    addPointBtn.layer.cornerRadius = 6.0;
+    [addPointBtn setTitle:@"➕ Thêm Điểm" forState:UIControlStateNormal];
+    [addPointBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    addPointBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+    [addPointBtn addTarget:self action:@selector(addNewTargetMarker) forControlEvents:UIControlEventTouchUpInside];
+    [autoClickTabContainer addSubview:addPointBtn];
+
+    // Nút 2: Xóa Điểm
+    clearPointsBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    clearPointsBtn.frame = CGRectMake(112, 8, 96, 32);
+    clearPointsBtn.backgroundColor = [UIColor colorWithRed:0.40 green:0.40 blue:0.48 alpha:1.0];
+    clearPointsBtn.layer.cornerRadius = 6.0;
+    [clearPointsBtn setTitle:@"🗑️ Xóa Hết" forState:UIControlStateNormal];
+    [clearPointsBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    clearPointsBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+    [clearPointsBtn addTarget:self action:@selector(clearAllTargetMarkers) forControlEvents:UIControlEventTouchUpInside];
+    [autoClickTabContainer addSubview:clearPointsBtn];
+
+    // Nút 3: Ghi Lại Thao Tác (Macro)
+    recordMacroBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    recordMacroBtn.frame = CGRectMake(214, 8, 96, 32);
+    recordMacroBtn.backgroundColor = [UIColor colorWithRed:0.85 green:0.40 blue:0.10 alpha:1.0];
+    recordMacroBtn.layer.cornerRadius = 6.0;
+    [recordMacroBtn setTitle:@"⏺️ Ghi Thao Tác" forState:UIControlStateNormal];
+    [recordMacroBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    recordMacroBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+    [recordMacroBtn addTarget:self action:@selector(toggleMacroRecording) forControlEvents:UIControlEventTouchUpInside];
+    [autoClickTabContainer addSubview:recordMacroBtn];
+
+    // Bảng trạng thái Auto Click
+    UIView *statusBox = [[UIView alloc] initWithFrame:CGRectMake(10, 48, menuWidth - 20, 80)];
+    statusBox.backgroundColor = [UIColor colorWithRed:0.05 green:0.05 blue:0.08 alpha:1.0];
+    statusBox.layer.cornerRadius = 8.0;
+    statusBox.layer.borderWidth = 1.0;
+    statusBox.layer.borderColor = [UIColor colorWithRed:0.20 green:0.20 blue:0.28 alpha:1.0].CGColor;
+    [autoClickTabContainer addSubview:statusBox];
+
+    autoStatusLabel = [[UILabel alloc] initWithFrame:CGRectMake(8, 6, menuWidth - 36, 68)];
+    autoStatusLabel.numberOfLines = 0;
+    autoStatusLabel.textColor = [UIColor colorWithRed:0.85 green:0.85 blue:0.90 alpha:1.0];
+    autoStatusLabel.font = [UIFont systemFontOfSize:11];
+    autoStatusLabel.text = @"🎯 Số điểm: 0\n⏱️ Chạm vào hình tròn để chỉnh giây\n🔄 Tự động lặp lại liên tục\n🛡️ An toàn: Không click trúng Menu";
+    [statusBox addSubview:autoStatusLabel];
+
+    // Nút Play / Stop ở đáy menu
+    toggleAutoRunBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    toggleAutoRunBtn.frame = CGRectMake(12, 136, menuWidth - 24, 38);
+    toggleAutoRunBtn.backgroundColor = [UIColor colorWithRed:0.15 green:0.65 blue:0.30 alpha:1.0];
+    toggleAutoRunBtn.layer.cornerRadius = 8.0;
+    [toggleAutoRunBtn setTitle:@"▶ BẮT ĐẦU" forState:UIControlStateNormal];
+    [toggleAutoRunBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    toggleAutoRunBtn.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+    [toggleAutoRunBtn addTarget:self action:@selector(toggleAutoClickExecution) forControlEvents:UIControlEventTouchUpInside];
+    [autoClickTabContainer addSubview:toggleAutoRunBtn];
+
     [targetWindow addSubview:menuContainer];
 
     // Khởi tạo các module mở rộng
@@ -465,7 +609,7 @@ static NSInteger currentFPS = 60;
 
     [self updateLayoutForAdminState:NO];
 
-    // BẮT SỰ KIỆN KHI NGƯỜI DÙNG QUAY LẠI ROBLOX: TỰ ĐỘNG BẮT LINK TỪ SAFARI VỪA COPY
+    // Bắt sự kiện quay lại app để tự động lấy link
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
@@ -475,38 +619,405 @@ static NSInteger currentFPS = 60;
             [robloxWindow bringSubviewToFront:infoWidgetLabel];
             [robloxWindow bringSubviewToFront:menuContainer];
         }
-        if (menuContainer && !menuContainer.hidden) {
+        if (menuContainer && !menuContainer.hidden && !isAutoClickTabActive) {
             [self autoDetectClipboardLink];
         }
     }];
 }
 
 // ============================================================
-// ĐIỀU CHỈNH LAYOUT GIỮA CHẾ ĐỘ KHÁCH VÀ ADMIN
+// CHUYỂN ĐỔI TAB (BYPASS <-> AUTO CLICK)
+// ============================================================
++ (void)toggleTabs {
+    [self triggerImpact:UIImpactFeedbackStyleLight];
+    isAutoClickTabActive = !isAutoClickTabActive;
+
+    if (isAutoClickTabActive) {
+        [tabSwitchBtn setTitle:@"⚡ Bypass" forState:UIControlStateNormal];
+        tabSwitchBtn.backgroundColor = [UIColor colorWithRed:0.85 green:0.55 blue:0.10 alpha:1.0];
+        bypassTabContainer.hidden = YES;
+        autoClickTabContainer.hidden = NO;
+        menuContainer.frame = CGRectMake(menuContainer.frame.origin.x, menuContainer.frame.origin.y, 320.0, 225.0);
+    } else {
+        [tabSwitchBtn setTitle:@"🎯 Auto" forState:UIControlStateNormal];
+        tabSwitchBtn.backgroundColor = [UIColor colorWithRed:0.22 green:0.55 blue:0.85 alpha:1.0];
+        autoClickTabContainer.hidden = YES;
+        bypassTabContainer.hidden = NO;
+        [self updateLayoutForAdminState:isAdminMode];
+        [self autoDetectClipboardLink];
+    }
+}
+
+// ============================================================
+// LOGIC AUTO CLICK: THÊM ĐIỂM, CHỈNH GIÂY & KÉO THẢ
+// ============================================================
++ (void)addNewTargetMarker {
+    [self triggerImpact:UIImpactFeedbackStyleMedium];
+    NSInteger newIndex = targetMarkers.count + 1;
+
+    CGFloat size = 38.0;
+    CGFloat startX = 60.0 + (newIndex * 20.0);
+    CGFloat startY = 220.0 + (newIndex * 15.0);
+    if (startX > robloxWindow.bounds.size.width - 50) startX = 60.0;
+    if (startY > robloxWindow.bounds.size.height - 100) startY = 220.0;
+
+    UIView *mView = [[UIView alloc] initWithFrame:CGRectMake(startX, startY, size, size)];
+    mView.backgroundColor = [UIColor colorWithRed:0.0 green:0.55 blue:1.0 alpha:0.75];
+    mView.layer.cornerRadius = size / 2.0;
+    mView.layer.borderWidth = 2.0;
+    mView.layer.borderColor = [UIColor whiteColor].CGColor;
+    mView.layer.shadowColor = [UIColor blackColor].CGColor;
+    mView.layer.shadowOpacity = 0.5;
+    mView.layer.shadowOffset = CGSizeMake(0, 2);
+    mView.layer.shadowRadius = 3.0;
+    mView.userInteractionEnabled = YES;
+
+    // Số thứ tự ở giữa
+    UILabel *numLbl = [[UILabel alloc] initWithFrame:CGRectMake(0, 2, size, 18)];
+    numLbl.text = [NSString stringWithFormat:@"%ld", (long)newIndex];
+    numLbl.textColor = [UIColor whiteColor];
+    numLbl.font = [UIFont boldSystemFontOfSize:14];
+    numLbl.textAlignment = NSTextAlignmentCenter;
+    [mView addSubview:numLbl];
+
+    // Nhãn thời gian chờ bên dưới
+    UILabel *dlyLbl = [[UILabel alloc] initWithFrame:CGRectMake(0, 18, size, 16)];
+    dlyLbl.text = @"0.5s";
+    dlyLbl.textColor = [UIColor colorWithRed:1.0 green:0.9 blue:0.3 alpha:1.0];
+    dlyLbl.font = [UIFont boldSystemFontOfSize:9];
+    dlyLbl.textAlignment = NSTextAlignmentCenter;
+    [mView addSubview:dlyLbl];
+
+    AutoClickTarget *target = [[AutoClickTarget alloc] init];
+    target.index = newIndex;
+    target.markerView = mView;
+    target.numberLabel = numLbl;
+    target.delayLabel = dlyLbl;
+    target.delaySeconds = 0.5;
+    target.screenPoint = mView.center;
+
+    // Cử chỉ kéo thả
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragTargetMarker:)];
+    [mView addGestureRecognizer:pan];
+
+    // Cử chỉ chạm để chỉnh thời gian
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTapTargetMarker:)];
+    [mView addGestureRecognizer:tap];
+
+    [robloxWindow addSubview:mView];
+    [targetMarkers addObject:target];
+
+    [self updateAutoStatusText];
+}
+
++ (void)handleDragTargetMarker:(UIPanGestureRecognizer *)g {
+    UIView *v = g.view;
+    CGPoint trans = [g translationInView:robloxWindow];
+    v.center = CGPointMake(v.center.x + trans.x, v.center.y + trans.y);
+    [g setTranslation:CGPointZero inView:robloxWindow];
+
+    for (AutoClickTarget *t in targetMarkers) {
+        if (t.markerView == v) {
+            t.screenPoint = v.center;
+            break;
+        }
+    }
+}
+
++ (void)handleTapTargetMarker:(UITapGestureRecognizer *)g {
+    [self triggerImpact:UIImpactFeedbackStyleLight];
+    UIView *v = g.view;
+    AutoClickTarget *target = nil;
+    for (AutoClickTarget *t in targetMarkers) {
+        if (t.markerView == v) { target = t; break; }
+    }
+    if (!target) return;
+
+    UIViewController *topVC = robloxWindow.rootViewController;
+    while (topVC.presentedViewController) topVC = topVC.presentedViewController;
+    if (!topVC) return;
+
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"⏱️ Cài Đặt Điểm #%ld", (long)target.index]
+                                                                   message:@"Nhập thời gian chờ cho điểm này (giây):\n(Ví dụ: 0.1, 0.5, 1, 2...)"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+
+    [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
+        textField.text = [NSString stringWithFormat:@"%.2f", target.delaySeconds];
+        textField.keyboardType = UIKeyboardTypeDecimalPad;
+    }];
+
+    [alert addAction:[UIAlertAction actionWithTitle:@"Lưu" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        NSString *txt = alert.textFields.firstObject.text;
+        CGFloat val = [txt floatValue];
+        if (val < 0.02) val = 0.02; // Tối thiểu 20ms tránh đơ app
+        target.delaySeconds = val;
+        target.delayLabel.text = [NSString stringWithFormat:@"%.1fs", val];
+        [self triggerNotify:UINotificationFeedbackTypeSuccess];
+        [self updateAutoStatusText];
+    }]];
+
+    [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
+    [topVC presentViewController:alert animated:YES completion:nil];
+}
+
++ (void)clearAllTargetMarkers {
+    [self triggerImpact:UIImpactFeedbackStyleMedium];
+    for (AutoClickTarget *t in targetMarkers) {
+        [t.markerView removeFromSuperview];
+    }
+    [targetMarkers removeAllObjects];
+    [self updateAutoStatusText];
+}
+
++ (void)updateAutoStatusText {
+    if (isRecordingMacro) {
+        autoStatusLabel.text = [NSString stringWithFormat:@"🔴 ĐANG GHI THAO TÁC...\nĐã ghi: %lu bước chạm\nBấm [Lưu Ghi] để hoàn tất.", (unsigned long)recordedMacroSteps.count];
+        autoStatusLabel.textColor = [UIColor colorWithRed:1.0 green:0.4 blue:0.4 alpha:1.0];
+        return;
+    }
+
+    NSString *macroStatus = (recordedMacroSteps.count > 0) ? [NSString stringWithFormat:@"Đã có Macro (%lu bước)", (unsigned long)recordedMacroSteps.count] : @"Chưa có Macro";
+    autoStatusLabel.text = [NSString stringWithFormat:@"🎯 Số điểm click: %lu\n📹 Macro: %@\n⚡ Trạng thái: %@\n🛡️ An toàn: Tự động tránh Menu",
+                            (unsigned long)targetMarkers.count,
+                            macroStatus,
+                            isAutoRunning ? @"ĐANG CHẠY" : @"ĐANG DỪNG"];
+    autoStatusLabel.textColor = isAutoRunning ? [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0] : [UIColor colorWithRed:0.85 green:0.85 blue:0.90 alpha:1.0];
+}
+
+// ============================================================
+// GHI LẠI THAO TÁC (MACRO RECORDER)
+// ============================================================
++ (void)toggleMacroRecording {
+    [self triggerImpact:UIImpactFeedbackStyleHeavy];
+    if (isAutoRunning) {
+        [self stopAutoClick];
+    }
+
+    isRecordingMacro = !isRecordingMacro;
+
+    if (isRecordingMacro) {
+        [recordedMacroSteps removeAllObjects];
+        recordStartTime = [NSDate timeIntervalSinceReferenceDate];
+        [recordMacroBtn setTitle:@"⏹️ Lưu Ghi" forState:UIControlStateNormal];
+        recordMacroBtn.backgroundColor = [UIColor colorWithRed:0.85 green:0.20 blue:0.20 alpha:1.0];
+
+        // Tạo màn che trong suốt để thu nhận thao tác
+        if (!macroRecorderView) {
+            macroRecorderView = [[MacroRecorderOverlayView alloc] initWithFrame:robloxWindow.bounds];
+            macroRecorderView.backgroundColor = [UIColor colorWithWhite:0 alpha:0.01];
+            __weak typeof(self) weakSelf = self;
+            macroRecorderView.onTouchEvent = ^(CGPoint pt, NSInteger phase) {
+                [weakSelf recordTouchAtPoint:pt phase:phase];
+            };
+        }
+        [robloxWindow addSubview:macroRecorderView];
+        [robloxWindow bringSubviewToFront:menuContainer]; // Giữ menu luôn ở trên
+        [self updateAutoStatusText];
+    } else {
+        [recordMacroBtn setTitle:@"⏺️ Ghi Thao Tác" forState:UIControlStateNormal];
+        recordMacroBtn.backgroundColor = [UIColor colorWithRed:0.85 green:0.40 blue:0.10 alpha:1.0];
+        if (macroRecorderView) {
+            [macroRecorderView removeFromSuperview];
+        }
+        [self triggerNotify:UINotificationFeedbackTypeSuccess];
+        [self updateAutoStatusText];
+    }
+}
+
++ (void)recordTouchAtPoint:(CGPoint)pt phase:(NSInteger)phase {
+    if (!isRecordingMacro) return;
+    // Bỏ qua nếu chạm vào menu
+    if (menuContainer && !menuContainer.hidden && CGRectContainsPoint(menuContainer.frame, pt)) {
+        return;
+    }
+
+    NSTimeInterval current = [NSDate timeIntervalSinceReferenceDate];
+    MacroTouchStep *step = [[MacroTouchStep alloc] init];
+    step.point = pt;
+    step.timeOffset = current - recordStartTime;
+    step.phase = phase;
+    [recordedMacroSteps addObject:step];
+
+    // Phát lại ngay vào game bên dưới để người dùng vẫn chơi bình thường khi đang ghi
+    [self simulateDirectTouchAtPoint:pt phase:(phase == 2 ? UITouchPhaseEnded : UITouchPhaseBegan)];
+}
+
+// ============================================================
+// BẬT / TẮT THỰC THI AUTO CLICK & MACRO
+// ============================================================
++ (void)toggleAutoClickExecution {
+    [self triggerImpact:UIImpactFeedbackStyleHeavy];
+    if (isAutoRunning) {
+        [self stopAutoClick];
+    } else {
+        [self startAutoClick];
+    }
+}
+
++ (void)startAutoClick {
+    if (targetMarkers.count == 0 && recordedMacroSteps.count == 0) {
+        [self triggerNotify:UINotificationFeedbackTypeWarning];
+        autoStatusLabel.text = @"⚠️ Hãy thêm ít nhất 1 điểm click hoặc ghi lại thao tác trước!";
+        autoStatusLabel.textColor = [UIColor colorWithRed:1.0 green:0.8 blue:0.2 alpha:1.0];
+        return;
+    }
+
+    isAutoRunning = YES;
+    [toggleAutoRunBtn setTitle:@"⏹ DỪNG LẠI" forState:UIControlStateNormal];
+    toggleAutoRunBtn.backgroundColor = [UIColor colorWithRed:0.85 green:0.20 blue:0.20 alpha:1.0];
+    [self updateAutoStatusText];
+
+    if (recordedMacroSteps.count > 0) {
+        [self executeMacroLoopIndex:0];
+    } else {
+        currentRunningTargetIdx = 0;
+        [self executeTargetMarkerLoop];
+    }
+}
+
++ (void)stopAutoClick {
+    isAutoRunning = NO;
+    [toggleAutoRunBtn setTitle:@"▶ BẮT ĐẦU" forState:UIControlStateNormal];
+    toggleAutoRunBtn.backgroundColor = [UIColor colorWithRed:0.15 green:0.65 blue:0.30 alpha:1.0];
+    [self updateAutoStatusText];
+}
+
+// Vòng lặp các điểm đã đặt
++ (void)executeTargetMarkerLoop {
+    if (!isAutoRunning || targetMarkers.count == 0) return;
+
+    if (currentRunningTargetIdx >= targetMarkers.count) {
+        currentRunningTargetIdx = 0;
+    }
+
+    AutoClickTarget *target = targetMarkers[currentRunningTargetIdx];
+    CGPoint pt = target.screenPoint;
+
+    // KIỂM TRA AN TOÀN: Bỏ qua nếu điểm rơi trúng menu
+    if (!(menuContainer && !menuContainer.hidden && CGRectContainsPoint(menuContainer.frame, pt))) {
+        [self simulateTapAtPoint:pt];
+    }
+
+    currentRunningTargetIdx++;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(target.delaySeconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self executeTargetMarkerLoop];
+    });
+}
+
+// Vòng lặp phát lại Macro đã ghi
++ (void)executeMacroLoopIndex:(NSInteger)idx {
+    if (!isAutoRunning || recordedMacroSteps.count == 0) return;
+
+    if (idx >= recordedMacroSteps.count) {
+        // Lặp lại tuần hoàn từ đầu sau 0.1 giây
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self executeMacroLoopIndex:0];
+        });
+        return;
+    }
+
+    MacroTouchStep *currentStep = recordedMacroSteps[idx];
+    [self simulateDirectTouchAtPoint:currentStep.point phase:(currentStep.phase == 2 ? UITouchPhaseEnded : UITouchPhaseBegan)];
+
+    NSTimeInterval nextDelay = 0.05;
+    if (idx + 1 < recordedMacroSteps.count) {
+        MacroTouchStep *nextStep = recordedMacroSteps[idx + 1];
+        nextDelay = nextStep.timeOffset - currentStep.timeOffset;
+        if (nextDelay < 0.01) nextDelay = 0.01;
+    }
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(nextDelay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self executeMacroLoopIndex:idx + 1];
+    });
+}
+
+// ============================================================
+// CƠ CHẾ BẮN CẢM ỨNG ẢO VÀO GAME (SYNTHETIC TOUCH INJECTION)
+// ============================================================
++ (void)simulateTapAtPoint:(CGPoint)screenPoint {
+    [self simulateDirectTouchAtPoint:screenPoint phase:UITouchPhaseBegan];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.035 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self simulateDirectTouchAtPoint:screenPoint phase:UITouchPhaseEnded];
+    });
+}
+
++ (void)simulateDirectTouchAtPoint:(CGPoint)screenPoint phase:(UITouchPhase)phase {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // Ẩn tạm thời nhận diện chạm của các marker để hitTest đi thẳng vào game bên dưới
+        for (AutoClickTarget *t in targetMarkers) t.markerView.userInteractionEnabled = NO;
+
+        UIView *hit = [robloxWindow hitTest:screenPoint withEvent:nil];
+
+        for (AutoClickTarget *t in targetMarkers) t.markerView.userInteractionEnabled = YES;
+
+        if (!hit || hit == menuContainer || [hit isDescendantOfView:menuContainer] || hit == floatingCircleBtn) {
+            return;
+        }
+
+        CGPoint local = [hit convertPoint:screenPoint fromView:robloxWindow];
+        UITouch *touch = [[NSClassFromString(@"UITouch") alloc] init];
+
+        // Gán vị trí và trạng thái cảm ứng bằng runtime
+        Ivar ivarLoc = class_getInstanceVariable([UITouch class], "_locationInWindow");
+        if (ivarLoc) {
+            ptrdiff_t offset = ivar_getOffset(ivarLoc);
+            *(CGPoint *)((uintptr_t)(__bridge void *)touch + offset) = local;
+        }
+
+        Ivar ivarPhase = class_getInstanceVariable([UITouch class], "_phase");
+        if (ivarPhase) {
+            ptrdiff_t offset = ivar_getOffset(ivarPhase);
+            *(NSInteger *)((uintptr_t)(__bridge void *)touch + offset) = phase;
+        }
+
+        Ivar ivarView = class_getInstanceVariable([UITouch class], "_view");
+        if (ivarView) object_setIvar(touch, ivarView, hit);
+
+        Ivar ivarWin = class_getInstanceVariable([UITouch class], "_window");
+        if (ivarWin) object_setIvar(touch, ivarWin, robloxWindow);
+
+        NSSet *touchSet = [NSSet setWithObject:touch];
+
+        if (phase == UITouchPhaseBegan) {
+            if ([hit respondsToSelector:@selector(touchesBegan:withEvent:)]) {
+                [hit touchesBegan:touchSet withEvent:nil];
+            }
+        } else if (phase == UITouchPhaseEnded) {
+            if ([hit respondsToSelector:@selector(touchesEnded:withEvent:)]) {
+                [hit touchesEnded:touchSet withEvent:nil];
+            }
+        }
+    });
+}
+
+// ============================================================
+// ĐIỀU CHỈNH LAYOUT GIỮA CHẾ ĐỘ KHÁCH VÀ ADMIN (TAB BYPASS)
 // ============================================================
 + (void)updateLayoutForAdminState:(BOOL)admin {
     CGFloat menuWidth = 320.0;
     if (admin) {
         apiKeyInput.hidden = NO;
         keyActionContainer.hidden = NO;
-        linkInput.frame = CGRectMake(12, 106, menuWidth - 24, 32);
-        bypassBtn.frame = CGRectMake(12, 144, (menuWidth - 30) / 2, 34);
-        copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 6, 144, (menuWidth - 30) / 2, 34);
-        resultBox.frame = CGRectMake(12, 186, menuWidth - 24, 102);
+        linkInput.frame = CGRectMake(12, 68, menuWidth - 24, 32);
+        bypassBtn.frame = CGRectMake(12, 106, (menuWidth - 30) / 2, 34);
+        copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 6, 106, (menuWidth - 30) / 2, 34);
+        resultBox.frame = CGRectMake(12, 148, menuWidth - 24, 102);
         resultDisplay.frame = CGRectMake(6, 4, menuWidth - 36, 94);
-        menuContainer.frame = CGRectMake(menuContainer.frame.origin.x, menuContainer.frame.origin.y, menuWidth, 300.0);
+        bypassTabContainer.frame = CGRectMake(0, 38, menuWidth, 262.0);
+        if (!isAutoClickTabActive) menuContainer.frame = CGRectMake(menuContainer.frame.origin.x, menuContainer.frame.origin.y, menuWidth, 300.0);
 
         baconWebBtn.hidden = NO;
         googleWebBtn.frame = CGRectMake(139, 6, 74, 26);
     } else {
         apiKeyInput.hidden = YES;
         keyActionContainer.hidden = YES;
-        linkInput.frame = CGRectMake(12, 46, menuWidth - 24, 32);
-        bypassBtn.frame = CGRectMake(12, 86, (menuWidth - 30) / 2, 34);
-        copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 6, 86, (menuWidth - 30) / 2, 34);
-        resultBox.frame = CGRectMake(12, 128, menuWidth - 24, 95);
+        linkInput.frame = CGRectMake(12, 8, menuWidth - 24, 32);
+        bypassBtn.frame = CGRectMake(12, 48, (menuWidth - 30) / 2, 34);
+        copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 6, 48, (menuWidth - 30) / 2, 34);
+        resultBox.frame = CGRectMake(12, 90, menuWidth - 24, 95);
         resultDisplay.frame = CGRectMake(6, 4, menuWidth - 36, 87);
-        menuContainer.frame = CGRectMake(menuContainer.frame.origin.x, menuContainer.frame.origin.y, menuWidth, 235.0);
+        bypassTabContainer.frame = CGRectMake(0, 38, menuWidth, 197.0);
+        if (!isAutoClickTabActive) menuContainer.frame = CGRectMake(menuContainer.frame.origin.x, menuContainer.frame.origin.y, menuWidth, 235.0);
 
         baconWebBtn.hidden = YES;
         googleWebBtn.frame = CGRectMake(60, 6, 90, 26);
@@ -939,8 +1450,9 @@ static NSInteger currentFPS = 60;
     infoWidgetLabel.hidden = YES;
     [robloxWindow bringSubviewToFront:menuContainer];
 
-    // MỖI KHI MỞ MENU: TỰ ĐỘNG BẮT LINK VÀ ĐIỀN VÀO Ô DÁN LINK
-    [self autoDetectClipboardLink];
+    if (!isAutoClickTabActive) {
+        [self autoDetectClipboardLink];
+    }
 }
 
 + (void)minimizeMenu {
