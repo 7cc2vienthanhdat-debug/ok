@@ -61,7 +61,7 @@ static UIView *afkOverlay = nil;
 static UIButton *btnBackground = nil;
 static BOOL isBackgroundRunning = NO;
 static AVAudioPlayer *silentAudioPlayer = nil;
-static UIBackgroundTaskIdentifier bgTaskIdentifier; // Khai báo không gán trực tiếp để tránh lỗi compile-time constant
+static UIBackgroundTaskIdentifier bgTaskIdentifier; 
 
 // --- Trạng thái Admin & Killswitch ---
 static BOOL isAdminMode = NO;
@@ -103,9 +103,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     });
 }
 
-// ============================================================
-// BẮT LINK TỰ ĐỘNG TỪ BỘ NHỚ TẠM
-// ============================================================
 + (void)autoDetectClipboardLink {
     UIPasteboard *board = [UIPasteboard generalPasteboard];
     if (board && board.string) {
@@ -164,8 +161,8 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     if (!silentAudioPlayer) {
         NSData *silentData = [self generateSilentWavData];
         silentAudioPlayer = [[AVAudioPlayer alloc] initWithData:silentData error:&error];
-        silentAudioPlayer.numberOfLoops = -1;
-        silentAudioPlayer.volume = 0.01;
+        silentAudioPlayer.numberOfLoops = -1; 
+        silentAudioPlayer.volume = 0.01;      
         [silentAudioPlayer prepareToPlay];
     }
     [silentAudioPlayer play];
@@ -183,9 +180,12 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         [silentAudioPlayer stop];
         silentAudioPlayer = nil;
     }
+    
+    // Hủy hoàn toàn phiên âm thanh, trả quyền cho hệ thống
     AVAudioSession *session = [AVAudioSession sharedInstance];
     [session setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:nil];
 
+    // Trả lại Task Background, ứng dụng sẽ vào trạng thái ngủ đông như mặc định của iOS
     if (bgTaskIdentifier != UIBackgroundTaskInvalid) {
         [[UIApplication sharedApplication] endBackgroundTask:bgTaskIdentifier];
         bgTaskIdentifier = UIBackgroundTaskInvalid;
@@ -198,19 +198,19 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 
     if (isBackgroundRunning) {
         [self startBackgroundAudio];
-        [btnBackground setTitle:@"⚡ Chạy Ngầm: BẬT" forState:UIControlStateNormal];
+        [btnBackground setTitle:@"⚡ Treo Liên Tục: BẬT" forState:UIControlStateNormal];
         btnBackground.backgroundColor = [[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0] colorWithAlphaComponent:0.35];
         btnBackground.layer.borderColor = [UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0].CGColor;
         [self triggerNotify:UINotificationFeedbackTypeSuccess];
-        utilsResultDisplay.text = @"⚡ Đã KÍCH HOẠT chạy ngầm! Bạn có thể chuyển sang app khác mà game không bao giờ mất kết nối.";
+        utilsResultDisplay.text = @"⚡ Đã BẬT Treo Liên Tục! Khi bạn thoát ra hoặc tắt màn hình, game sẽ chạy nền mãi mãi.";
         utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
     } else {
         [self stopBackgroundAudio];
-        [btnBackground setTitle:@"⚡ Chạy Ngầm: TẮT" forState:UIControlStateNormal];
+        [btnBackground setTitle:@"⚡ Treo Liên Tục: TẮT" forState:UIControlStateNormal];
         btnBackground.backgroundColor = [[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0] colorWithAlphaComponent:0.25];
         btnBackground.layer.borderColor = [[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0] colorWithAlphaComponent:0.6].CGColor;
         [self triggerNotify:UINotificationFeedbackTypeWarning];
-        utilsResultDisplay.text = @"⏹️ Đã dừng chế độ chạy ngầm.";
+        utilsResultDisplay.text = @"⏹️ Đã TẮT tính năng treo. Hệ thống đã trở về bình thường. Tắt màn hình hoặc gạt app sẽ văng game sau vài giây.";
         utilsResultDisplay.textColor = [UIColor colorWithWhite:0.7 alpha:1.0];
     }
 }
@@ -308,7 +308,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 // KHỞI CHẠY HỆ THỐNG
 // ============================================================
 + (void)load {
-    bgTaskIdentifier = UIBackgroundTaskInvalid; // Gán giá trị an toàn trong runtime
+    bgTaskIdentifier = UIBackgroundTaskInvalid; 
     [UIDevice currentDevice].batteryMonitoringEnabled = YES;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [self tryInjectOverlay];
@@ -492,7 +492,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 }
 
 // ============================================================
-// THIẾT KẾ GIAO DIỆN (UI) LIQUID GLASS
+// THIẾT KẾ GIAO DIỆN (UI)
 // ============================================================
 + (void)setupViewsInWindow:(UIWindow *)targetWindow {
     floatingCircleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -707,7 +707,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [resultBox addSubview:resultDisplay];
 
     // ==========================================
-    // KHUNG TAB 2: TIỆN ÍCH (GỒM NÚT CHẠY NGẦM)
+    // KHUNG TAB 2: TIỆN ÍCH
     // ==========================================
     utilsTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, bodyY, menuWidth, menuHeight - bodyY)];
     utilsTabContainer.hidden = YES;
@@ -719,7 +719,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [btnCrosshair addTarget:self action:@selector(toggleCrosshair) forControlEvents:UIControlEventTouchUpInside];
     [utilsTabContainer addSubview:btnCrosshair];
 
-    btnBackground = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(btnCrosshair.frame) + 8, 8, halfBtnW, 38) title:@"⚡ Chạy Ngầm: TẮT" color:[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0]];
+    btnBackground = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(btnCrosshair.frame) + 8, 8, halfBtnW, 38) title:@"⚡ Treo Liên Tục: TẮT" color:[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0]];
     [btnBackground addTarget:self action:@selector(toggleBackgroundExecution) forControlEvents:UIControlEventTouchUpInside];
     [utilsTabContainer addSubview:btnBackground];
 
