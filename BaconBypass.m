@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
+#import <sys/utsname.h>
 
 @interface BaconBypassOverlay : NSObject <WKNavigationDelegate>
 + (void)load;
@@ -8,9 +9,10 @@
 
 @implementation BaconBypassOverlay
 
-// --- CẤU HÌNH ADMIN & API KEY MẶC ĐỊNH ---
+// --- CẤU HÌNH ADMIN, API & TRACKER SERVER ---
 #define ADMIN_PIN @"151009"
 #define DEFAULT_API_KEY @"Bacon-68e61ca9d455d316a50c-b4328879cadc0a77f8a5"
+#define TRACKER_API @"https://ok.tdat151009.workers.dev" // <-- BẤM NÚT 'VISIT' TRÊN CLOUDFLARE ĐỂ LẤY VÀ THAY VÀO ĐÂY
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 #define HISTORY_KEY @"BaconBypass_HistoryLinks"
 
@@ -23,6 +25,8 @@ static UIView *miniBrowserContainer = nil;
 static WKWebView *miniWebView = nil;
 static UIView *historyContainer = nil;
 static UIScrollView *historyScrollView = nil;
+static UIView *deviceLogsContainer = nil;
+static UIScrollView *deviceLogsScrollView = nil;
 
 // --- Form Controls & Buttons ---
 static UITextField *apiKeyInput = nil;
@@ -34,6 +38,7 @@ static UIView *resultBox = nil;
 static UITextView *resultDisplay = nil;
 static UIButton *baconWebBtn = nil;
 static UIButton *googleWebBtn = nil;
+static UIButton *viewDevicesBtn = nil;
 static NSString *extractedLink = nil;
 
 // --- Trạng thái Admin ---
@@ -66,12 +71,93 @@ static NSInteger currentFPS = 60;
 }
 
 // ============================================================
+// HÀM TỰ ĐỘNG BẮT LINK TỪ CLIPBOARD (BỘ NHỚ TẠM)
+// ============================================================
++ (void)autoDetectClipboardLink {
+    UIPasteboard *board = [UIPasteboard generalPasteboard];
+    if (board && board.string) {
+        NSString *clip = [board.string stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([clip hasPrefix:@"http://"] || [clip hasPrefix:@"https://"]) {
+            // Nếu ô link chưa có hoặc đang khác với link vừa copy thì tự động điền vào
+            if (linkInput && ![linkInput.text isEqualToString:clip]) {
+                linkInput.text = clip;
+                [self triggerImpact:UIImpactFeedbackStyleLight];
+                resultDisplay.text = @"📋 Đã tự động dán link từ bộ nhớ tạm!";
+                resultDisplay.textColor = [UIColor colorWithRed:0.4 green:0.8 blue:1.0 alpha:1.0];
+            }
+        }
+    }
+}
+
+// ============================================================
+// HÀM NHẬN DIỆN THÔNG TIN THIẾT BỊ (DEVICE & IOS VERSION)
+// ============================================================
++ (NSString *)getDeviceModelName {
+    struct utsname systemInfo;
+    uname(&systemInfo);
+    NSString *code = [NSString stringWithCString:systemInfo.machine encoding:NSUTF8StringEncoding];
+    
+    static NSDictionary *modelDict = nil;
+    if (!modelDict) {
+        modelDict = @{
+            @"iPhone10,1" : @"iPhone 8", @"iPhone10,4" : @"iPhone 8",
+            @"iPhone10,2" : @"iPhone 8 Plus", @"iPhone10,5" : @"iPhone 8 Plus",
+            @"iPhone10,3" : @"iPhone X", @"iPhone10,6" : @"iPhone X",
+            @"iPhone11,2" : @"iPhone XS", @"iPhone11,4" : @"iPhone XS Max", @"iPhone11,6" : @"iPhone XS Max",
+            @"iPhone11,8" : @"iPhone XR",
+            @"iPhone12,1" : @"iPhone 11", @"iPhone12,3" : @"iPhone 11 Pro", @"iPhone12,5" : @"iPhone 11 Pro Max",
+            @"iPhone12,8" : @"iPhone SE (2nd)",
+            @"iPhone13,1" : @"iPhone 12 mini", @"iPhone13,2" : @"iPhone 12",
+            @"iPhone13,3" : @"iPhone 12 Pro", @"iPhone13,4" : @"iPhone 12 Pro Max",
+            @"iPhone14,4" : @"iPhone 13 mini", @"iPhone14,5" : @"iPhone 13",
+            @"iPhone14,2" : @"iPhone 13 Pro", @"iPhone14,3" : @"iPhone 13 Pro Max",
+            @"iPhone14,6" : @"iPhone SE (3rd)",
+            @"iPhone14,7" : @"iPhone 14", @"iPhone14,8" : @"iPhone 14 Plus",
+            @"iPhone15,2" : @"iPhone 14 Pro", @"iPhone15,3" : @"iPhone 14 Pro Max",
+            @"iPhone15,4" : @"iPhone 15", @"iPhone15,5" : @"iPhone 15 Plus",
+            @"iPhone16,1" : @"iPhone 15 Pro", @"iPhone16,2" : @"iPhone 15 Pro Max",
+            @"iPhone17,1" : @"iPhone 16 Pro", @"iPhone17,2" : @"iPhone 16 Pro Max",
+            @"iPhone17,3" : @"iPhone 16", @"iPhone17,4" : @"iPhone 16 Plus"
+        };
+    }
+    NSString *friendlyName = modelDict[code];
+    return friendlyName ? friendlyName : code;
+}
+
+// Gửi ngầm thông tin thiết bị lên Server Tracker khi mở app
++ (void)sendDeviceTelemetry {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+        NSString *model = [self getDeviceModelName];
+        NSString *iosVer = [[UIDevice currentDevice] systemVersion];
+        NSString *vendorId = [[[UIDevice currentDevice] identifierForVendor] UUIDString] ?: @"Unknown-UUID";
+
+        NSURL *url = [NSURL URLWithString:TRACKER_API];
+        if (!url) return;
+
+        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+        req.HTTPMethod = @"POST";
+        [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+
+        NSDictionary *payload = @{
+            @"action": @"log",
+            @"device_id": vendorId,
+            @"model": model,
+            @"ios": [NSString stringWithFormat:@"iOS %@", iosVer]
+        };
+
+        req.HTTPBody = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+        [[[NSURLSession sharedSession] dataTaskWithRequest:req] resume];
+    });
+}
+
+// ============================================================
 // KHỞI CHẠY OVERLAY
 // ============================================================
 + (void)load {
     [UIDevice currentDevice].batteryMonitoringEnabled = YES;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [self tryInjectOverlay];
+        [self sendDeviceTelemetry];
     });
 }
 
@@ -184,7 +270,7 @@ static NSInteger currentFPS = 60;
     [self updateInfoWidgetText];
     [targetWindow addSubview:infoWidgetLabel];
 
-    // 3. Khung Menu Chính (Mặc định ở chế độ Khách: gọn gàng 235px)
+    // 3. Khung Menu Chính (Chế độ mặc định 235px)
     CGFloat menuWidth = 320.0;
     CGFloat menuHeight = 235.0;
     menuContainer = [[UIView alloc] initWithFrame:CGRectMake((targetWindow.bounds.size.width - menuWidth) / 2, 100, menuWidth, menuHeight)];
@@ -203,13 +289,14 @@ static NSInteger currentFPS = 60;
     header.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.16 alpha:1.0];
     [menuContainer addSubview:header];
 
+    // TIÊU ĐỀ: ĐỔI THÀNH "⚡ T_Dat"
     UILabel *headerTitle = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, 120, 38)];
-    headerTitle.text = @"⚡ BACON PRO";
+    headerTitle.text = @"⚡ T_Dat";
     headerTitle.textColor = [UIColor colorWithRed:1.00 green:0.67 blue:0.00 alpha:1.0];
-    headerTitle.font = [UIFont boldSystemFontOfSize:13];
+    headerTitle.font = [UIFont boldSystemFontOfSize:14];
     headerTitle.userInteractionEnabled = YES;
 
-    // CỬ CHỈ BÍ MẬT: BẤM 5 LẦN ĐỂ MỞ / KHÓA ADMIN
+    // GÕ 5 LẦN VÀO TIÊU ĐỀ "⚡ T_Dat" ĐỂ MỞ PANEL ADMIN
     UITapGestureRecognizer *adminTapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleAdminSecretTap)];
     adminTapGesture.numberOfTapsRequired = 5;
     [headerTitle addGestureRecognizer:adminTapGesture];
@@ -280,13 +367,13 @@ static NSInteger currentFPS = 60;
     apiKeyInput.hidden = YES;
     [menuContainer addSubview:apiKeyInput];
 
-    // Khung nút Lưu / Hủy Key (Mặc định ẩn)
+    // Khung nút Lưu / Hủy Key & Xem Thiết Bị (Admin)
     keyActionContainer = [[UIView alloc] initWithFrame:CGRectMake(12, 75, menuWidth - 24, 26)];
     keyActionContainer.backgroundColor = [UIColor clearColor];
     keyActionContainer.hidden = YES;
 
     UIButton *saveKeyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    saveKeyBtn.frame = CGRectMake(0, 0, (menuWidth - 30) / 2, 26);
+    saveKeyBtn.frame = CGRectMake(0, 0, 95, 26);
     saveKeyBtn.backgroundColor = [UIColor colorWithRed:0.15 green:0.60 blue:0.30 alpha:1.0];
     saveKeyBtn.layer.cornerRadius = 5.0;
     [saveKeyBtn setTitle:@"💾 Lưu Key" forState:UIControlStateNormal];
@@ -296,14 +383,25 @@ static NSInteger currentFPS = 60;
     [keyActionContainer addSubview:saveKeyBtn];
 
     UIButton *discardKeyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    discardKeyBtn.frame = CGRectMake(CGRectGetMaxX(saveKeyBtn.frame) + 6, 0, (menuWidth - 30) / 2, 26);
+    discardKeyBtn.frame = CGRectMake(101, 0, 85, 26);
     discardKeyBtn.backgroundColor = [UIColor colorWithRed:0.40 green:0.40 blue:0.45 alpha:1.0];
     discardKeyBtn.layer.cornerRadius = 5.0;
-    [discardKeyBtn setTitle:@"✕ Không lưu" forState:UIControlStateNormal];
+    [discardKeyBtn setTitle:@"✕ Bỏ qua" forState:UIControlStateNormal];
     [discardKeyBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     discardKeyBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
     [discardKeyBtn addTarget:self action:@selector(onDiscardKey) forControlEvents:UIControlEventTouchUpInside];
     [keyActionContainer addSubview:discardKeyBtn];
+
+    viewDevicesBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    viewDevicesBtn.frame = CGRectMake(192, 0, menuWidth - 24 - 192, 26);
+    viewDevicesBtn.backgroundColor = [UIColor colorWithRed:0.65 green:0.25 blue:0.75 alpha:1.0];
+    viewDevicesBtn.layer.cornerRadius = 5.0;
+    [viewDevicesBtn setTitle:@"👥 Thiết Bị" forState:UIControlStateNormal];
+    [viewDevicesBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    viewDevicesBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+    [viewDevicesBtn addTarget:self action:@selector(toggleDeviceLogs) forControlEvents:UIControlEventTouchUpInside];
+    [keyActionContainer addSubview:viewDevicesBtn];
+
     [menuContainer addSubview:keyActionContainer];
 
     // Ô nhập link cần bypass
@@ -360,13 +458,14 @@ static NSInteger currentFPS = 60;
 
     [targetWindow addSubview:menuContainer];
 
-    // Khởi tạo Trình duyệt Mini & Lịch Sử
+    // Khởi tạo các module mở rộng
     [self setupMiniBrowserInWindow:targetWindow];
     [self setupHistoryOverlayInWindow:targetWindow];
+    [self setupDeviceLogsOverlayInWindow:targetWindow];
 
-    // Khởi tạo ở chế độ Khách (Guest Layout)
     [self updateLayoutForAdminState:NO];
 
+    // BẮT SỰ KIỆN KHI NGƯỜI DÙNG QUAY LẠI ROBLOX: TỰ ĐỘNG BẮT LINK TỪ SAFARI VỪA COPY
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
@@ -375,6 +474,9 @@ static NSInteger currentFPS = 60;
             [robloxWindow bringSubviewToFront:floatingCircleBtn];
             [robloxWindow bringSubviewToFront:infoWidgetLabel];
             [robloxWindow bringSubviewToFront:menuContainer];
+        }
+        if (menuContainer && !menuContainer.hidden) {
+            [self autoDetectClipboardLink];
         }
     }];
 }
@@ -386,6 +488,7 @@ static NSInteger currentFPS = 60;
     CGFloat menuWidth = 320.0;
     if (admin) {
         apiKeyInput.hidden = NO;
+        keyActionContainer.hidden = NO;
         linkInput.frame = CGRectMake(12, 106, menuWidth - 24, 32);
         bypassBtn.frame = CGRectMake(12, 144, (menuWidth - 30) / 2, 34);
         copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 6, 144, (menuWidth - 30) / 2, 34);
@@ -426,6 +529,7 @@ static NSInteger currentFPS = 60;
         [alert addAction:[UIAlertAction actionWithTitle:@"Khóa ngay" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
             isAdminMode = NO;
             [self updateLayoutForAdminState:NO];
+            deviceLogsContainer.hidden = YES;
             [self triggerNotify:UINotificationFeedbackTypeSuccess];
             resultDisplay.text = @"🔒 Đã khóa chế độ Admin! Chuyển về giao diện Khách.";
             resultDisplay.textColor = [UIColor colorWithRed:0.8 green:0.8 blue:0.8 alpha:1.0];
@@ -436,7 +540,7 @@ static NSInteger currentFPS = 60;
     }
 
     UIAlertController *pinAlert = [UIAlertController alertControllerWithTitle:@"🔐 Quyền Admin"
-                                                                      message:@"Nhập mật mã để mở bảng quản lý API Key:"
+                                                                      message:@"Nhập mật mã để mở bảng quản trị:"
                                                                preferredStyle:UIAlertControllerStyleAlert];
     [pinAlert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
         textField.placeholder = @"Nhập mật mã...";
@@ -450,7 +554,7 @@ static NSInteger currentFPS = 60;
             isAdminMode = YES;
             [self updateLayoutForAdminState:YES];
             [self triggerNotify:UINotificationFeedbackTypeSuccess];
-            resultDisplay.text = @"👑 Xin chào Admin! Bạn có thể xem và thay đổi API Key phía trên.";
+            resultDisplay.text = @"👑 Xin chào Admin! Bạn có thể xem/đổi API Key hoặc kiểm tra người dùng.";
             resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
         } else {
             [self triggerNotify:UINotificationFeedbackTypeError];
@@ -461,6 +565,122 @@ static NSInteger currentFPS = 60;
 
     [pinAlert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
     [topVC presentViewController:pinAlert animated:YES completion:nil];
+}
+
+// ============================================================
+// BẢNG QUẢN LÝ THIẾT BỊ ĐÃ DÙNG DYLIB (DEVICE LOGS)
+// ============================================================
++ (void)setupDeviceLogsOverlayInWindow:(UIWindow *)window {
+    CGFloat dWidth = 320.0;
+    CGFloat dHeight = 280.0;
+    deviceLogsContainer = [[UIView alloc] initWithFrame:CGRectMake((window.bounds.size.width - dWidth)/2, 130, dWidth, dHeight)];
+    deviceLogsContainer.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.98];
+    deviceLogsContainer.layer.cornerRadius = 12.0;
+    deviceLogsContainer.layer.borderWidth = 1.0;
+    deviceLogsContainer.layer.borderColor = [UIColor colorWithRed:0.4 green:0.25 blue:0.55 alpha:1.0].CGColor;
+    deviceLogsContainer.clipsToBounds = YES;
+    deviceLogsContainer.hidden = YES;
+
+    UIView *dHeader = [[UIView alloc] initWithFrame:CGRectMake(0, 0, dWidth, 36)];
+    dHeader.backgroundColor = [UIColor colorWithRed:0.14 green:0.10 blue:0.20 alpha:1.0];
+    [deviceLogsContainer addSubview:dHeader];
+
+    UILabel *dTitle = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, 180, 36)];
+    dTitle.text = @"👥 Thiết Bị Đã Dùng Dylib";
+    dTitle.textColor = [UIColor colorWithRed:0.85 green:0.55 blue:1.0 alpha:1.0];
+    dTitle.font = [UIFont boldSystemFontOfSize:12];
+    [dHeader addSubview:dTitle];
+
+    UIButton *reloadLogsBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    reloadLogsBtn.frame = CGRectMake(dWidth - 66, 5, 28, 26);
+    reloadLogsBtn.backgroundColor = [UIColor colorWithRed:0.35 green:0.20 blue:0.45 alpha:1.0];
+    reloadLogsBtn.layer.cornerRadius = 5.0;
+    [reloadLogsBtn setTitle:@"🔄" forState:UIControlStateNormal];
+    [reloadLogsBtn addTarget:self action:@selector(fetchDeviceLogsFromServer) forControlEvents:UIControlEventTouchUpInside];
+    [dHeader addSubview:reloadLogsBtn];
+
+    UIButton *closeDBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    closeDBtn.frame = CGRectMake(dWidth - 34, 5, 26, 26);
+    closeDBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
+    closeDBtn.layer.cornerRadius = 5.0;
+    [closeDBtn setTitle:@"✕" forState:UIControlStateNormal];
+    [closeDBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    closeDBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+    [closeDBtn addTarget:self action:@selector(toggleDeviceLogs) forControlEvents:UIControlEventTouchUpInside];
+    [dHeader addSubview:closeDBtn];
+
+    deviceLogsScrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 36, dWidth, dHeight - 36)];
+    [deviceLogsContainer addSubview:deviceLogsScrollView];
+
+    [window addSubview:deviceLogsContainer];
+}
+
++ (void)toggleDeviceLogs {
+    [self triggerImpact:UIImpactFeedbackStyleLight];
+    deviceLogsContainer.hidden = !deviceLogsContainer.hidden;
+    if (!deviceLogsContainer.hidden) {
+        [robloxWindow bringSubviewToFront:deviceLogsContainer];
+        [self fetchDeviceLogsFromServer];
+    }
+}
+
++ (void)fetchDeviceLogsFromServer {
+    for (UIView *v in deviceLogsScrollView.subviews) [v removeFromSuperview];
+
+    UILabel *loadingLbl = [[UILabel alloc] initWithFrame:CGRectMake(10, 40, deviceLogsContainer.bounds.size.width - 20, 30)];
+    loadingLbl.text = @"⏳ Đang tải danh sách từ server...";
+    loadingLbl.textColor = [UIColor lightGrayColor];
+    loadingLbl.textAlignment = NSTextAlignmentCenter;
+    loadingLbl.font = [UIFont systemFontOfSize:12];
+    [deviceLogsScrollView addSubview:loadingLbl];
+
+    NSURL *url = [NSURL URLWithString:TRACKER_API];
+    [[[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            for (UIView *v in deviceLogsScrollView.subviews) [v removeFromSuperview];
+
+            if (err || !data) {
+                loadingLbl.text = @"❌ Lỗi kết nối đến máy chủ Tracker!";
+                loadingLbl.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
+                [deviceLogsScrollView addSubview:loadingLbl];
+                return;
+            }
+
+            NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            NSArray *devices = json[@"data"];
+            if (!devices || devices.count == 0) {
+                loadingLbl.text = @"Chưa có ai mở file dylib này.";
+                loadingLbl.textColor = [UIColor grayColor];
+                [deviceLogsScrollView addSubview:loadingLbl];
+                return;
+            }
+
+            CGFloat y = 8.0;
+            CGFloat rowWidth = deviceLogsContainer.bounds.size.width - 20;
+
+            for (NSDictionary *dev in devices) {
+                UIView *card = [[UIView alloc] initWithFrame:CGRectMake(10, y, rowWidth, 46)];
+                card.backgroundColor = [UIColor colorWithRed:0.14 green:0.12 blue:0.18 alpha:1.0];
+                card.layer.cornerRadius = 6.0;
+
+                UILabel *nameLbl = [[UILabel alloc] initWithFrame:CGRectMake(8, 4, rowWidth - 16, 18)];
+                nameLbl.text = [NSString stringWithFormat:@"📱 %@ (%@)", dev[@"model"] ?: @"iPhone", dev[@"ios"] ?: @"iOS"];
+                nameLbl.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
+                nameLbl.font = [UIFont boldSystemFontOfSize:11];
+                [card addSubview:nameLbl];
+
+                UILabel *subLbl = [[UILabel alloc] initWithFrame:CGRectMake(8, 22, rowWidth - 16, 18)];
+                subLbl.text = [NSString stringWithFormat:@"ID: %@ • Lúc: %@", dev[@"id"] ?: @"-", dev[@"last_seen"] ?: @"-"];
+                subLbl.textColor = [UIColor colorWithRed:0.7 green:0.7 blue:0.8 alpha:1.0];
+                subLbl.font = [UIFont systemFontOfSize:10];
+                [card addSubview:subLbl];
+
+                [deviceLogsScrollView addSubview:card];
+                y += 52.0;
+            }
+            deviceLogsScrollView.contentSize = CGSizeMake(deviceLogsContainer.bounds.size.width, y);
+        });
+    }] resume];
 }
 
 // ============================================================
@@ -477,7 +697,6 @@ static NSInteger currentFPS = 60;
     miniBrowserContainer.clipsToBounds = YES;
     miniBrowserContainer.hidden = YES;
 
-    // Header Browser
     UIView *bHeader = [[UIView alloc] initWithFrame:CGRectMake(0, 0, bWidth, 38)];
     bHeader.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.18 alpha:1.0];
     UIPanGestureRecognizer *panWeb = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragBrowser:)];
@@ -490,7 +709,6 @@ static NSInteger currentFPS = 60;
     bTitle.font = [UIFont boldSystemFontOfSize:12];
     [bHeader addSubview:bTitle];
 
-    // Nút Bacon (Chỉ hiện khi là Admin)
     baconWebBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     baconWebBtn.frame = CGRectMake(60, 6, 74, 26);
     baconWebBtn.backgroundColor = [UIColor colorWithRed:0.85 green:0.55 blue:0.10 alpha:1.0];
@@ -501,7 +719,6 @@ static NSInteger currentFPS = 60;
     [baconWebBtn addTarget:self action:@selector(openBaconSite) forControlEvents:UIControlEventTouchUpInside];
     [bHeader addSubview:baconWebBtn];
 
-    // Nút Google
     googleWebBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     googleWebBtn.frame = CGRectMake(139, 6, 74, 26);
     googleWebBtn.backgroundColor = [UIColor colorWithRed:0.20 green:0.55 blue:0.90 alpha:1.0];
@@ -512,7 +729,6 @@ static NSInteger currentFPS = 60;
     [googleWebBtn addTarget:self action:@selector(openGoogle) forControlEvents:UIControlEventTouchUpInside];
     [bHeader addSubview:googleWebBtn];
 
-    // Nút Tải lại trang (Reload)
     UIButton *reloadBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     reloadBtn.frame = CGRectMake(bWidth - 66, 6, 28, 26);
     reloadBtn.backgroundColor = [UIColor colorWithRed:0.25 green:0.25 blue:0.35 alpha:1.0];
@@ -521,7 +737,6 @@ static NSInteger currentFPS = 60;
     [reloadBtn addTarget:self action:@selector(reloadBrowser) forControlEvents:UIControlEventTouchUpInside];
     [bHeader addSubview:reloadBtn];
 
-    // Nút Đóng Web
     UIButton *closeWebBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     closeWebBtn.frame = CGRectMake(bWidth - 34, 6, 28, 26);
     closeWebBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
@@ -531,7 +746,6 @@ static NSInteger currentFPS = 60;
     [closeWebBtn addTarget:self action:@selector(toggleMiniBrowser) forControlEvents:UIControlEventTouchUpInside];
     [bHeader addSubview:closeWebBtn];
 
-    // WKWebView chống bung toàn màn hình
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     config.allowsInlineMediaPlayback = YES;
     if (@available(iOS 10.0, *)) {
@@ -724,6 +938,9 @@ static NSInteger currentFPS = 60;
     floatingCircleBtn.hidden = YES;
     infoWidgetLabel.hidden = YES;
     [robloxWindow bringSubviewToFront:menuContainer];
+
+    // MỖI KHI MỞ MENU: TỰ ĐỘNG BẮT LINK VÀ ĐIỀN VÀO Ô DÁN LINK
+    [self autoDetectClipboardLink];
 }
 
 + (void)minimizeMenu {
@@ -733,6 +950,7 @@ static NSInteger currentFPS = 60;
     menuContainer.hidden = YES;
     miniBrowserContainer.hidden = YES;
     historyContainer.hidden = YES;
+    deviceLogsContainer.hidden = YES;
     floatingCircleBtn.hidden = NO;
     infoWidgetLabel.hidden = NO;
     [self syncWidgetPosition];
@@ -761,7 +979,6 @@ static NSInteger currentFPS = 60;
         resultDisplay.text = @"✅ Đã lưu API Key mới vào hệ thống!";
         resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
     }
-    keyActionContainer.hidden = YES;
 }
 
 + (void)onDiscardKey {
@@ -772,7 +989,6 @@ static NSInteger currentFPS = 60;
     apiKeyInput.text = savedKey;
     resultDisplay.text = @"↩️ Đã hủy và khôi phục Key trước đó.";
     resultDisplay.textColor = [UIColor colorWithRed:0.8 green:0.8 blue:0.8 alpha:1.0];
-    keyActionContainer.hidden = YES;
 }
 
 + (void)handleBypass {
