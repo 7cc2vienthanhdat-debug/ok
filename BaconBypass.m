@@ -3,6 +3,7 @@
 #import <objc/runtime.h>
 #import <sys/utsname.h>
 #import <mach/mach.h>
+#import <AudioToolbox/AudioToolbox.h> // Thêm thư viện âm thanh
 
 @interface BaconBypassOverlay : NSObject <WKNavigationDelegate>
 + (void)load;
@@ -24,6 +25,7 @@ static UIButton *floatingCircleBtn = nil;
 // Menu chính
 static UIView *menuContainer = nil;
 static UIVisualEffectView *menuBlurView = nil;
+static UIView *menuBorderOverlay = nil; // Dùng để đổi màu RGB viền menu
 static UIView *menuDashboardBar = nil;
 static UILabel *hudInfoLabel = nil;
 
@@ -64,13 +66,16 @@ static long currentAppRamMB = 0;
 static NSString *currentThermalStatus = @"❄️ Mát";
 
 // ============================================================
-// HAPTIC FEEDBACK
+// HAPTIC FEEDBACK & UI SOUNDS (RUNG & ÂM THANH)
 // ============================================================
 + (void)triggerImpact:(UIImpactFeedbackStyle)style {
     dispatch_async(dispatch_get_main_queue(), ^{
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
         [gen prepare];
         [gen impactOccurred];
+        
+        // Tiếng "Tock" gõ phím chân thực
+        AudioServicesPlaySystemSound(1104);
     });
 }
 
@@ -79,6 +84,15 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         UINotificationFeedbackGenerator *gen = [[UINotificationFeedbackGenerator alloc] init];
         [gen prepare];
         [gen notificationOccurred:type];
+        
+        // Âm thanh thông báo
+        if (type == UINotificationFeedbackTypeSuccess) {
+            AudioServicesPlaySystemSound(1001); // Tiếng Ting báo thành công
+        } else if (type == UINotificationFeedbackTypeError) {
+            AudioServicesPlaySystemSound(1053); // Tiếng Bíp báo lỗi
+        } else if (type == UINotificationFeedbackTypeWarning) {
+            AudioServicesPlaySystemSound(1057); // Tiếng chuông cảnh báo
+        }
     });
 }
 
@@ -252,7 +266,17 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     currentHue += 0.005;
     if (currentHue > 1.0) currentHue = 0.0;
     UIColor *rainbowColor = [UIColor colorWithHue:currentHue saturation:0.95 brightness:1.0 alpha:1.0];
+    
+    // Viền RGB cho Nút nổi
     floatingCircleBtn.layer.borderColor = rainbowColor.CGColor;
+    
+    // Viền RGB và Bóng Glow cho Menu Chính
+    if (menuBorderOverlay) {
+        menuBorderOverlay.layer.borderColor = [rainbowColor colorWithAlphaComponent:0.7].CGColor;
+    }
+    if (menuContainer) {
+        menuContainer.layer.shadowColor = rainbowColor.CGColor;
+    }
 
     frameCount++;
     if (lastFpsTime == 0) lastFpsTime = link.timestamp;
@@ -293,7 +317,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     btn.layer.borderWidth = 1.0;
     btn.layer.borderColor = [color colorWithAlphaComponent:0.6].CGColor;
     
-    // Smooth corners iOS 13+
     if (@available(iOS 13.0, *)) { btn.layer.cornerCurve = kCACornerCurveContinuous; }
     
     [btn setTitle:title forState:UIControlStateNormal];
@@ -337,15 +360,23 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [floatingCircleBtn addGestureRecognizer:panBtn];
     [targetWindow addSubview:floatingCircleBtn];
 
+    // Khôi phục vị trí lưu của Nút tròn
+    NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
+    CGFloat savedCircleX = [defs floatForKey:@"BaconBypass_CirclePosX"];
+    CGFloat savedCircleY = [defs floatForKey:@"BaconBypass_CirclePosY"];
+    if (savedCircleX > 0 && savedCircleY > 0) {
+        floatingCircleBtn.center = CGPointMake(savedCircleX, savedCircleY);
+    }
+
     // 2. KHUNG MENU CHÍNH (LIQUID GLASS)
     CGFloat menuWidth = 340.0;
-    CGFloat menuHeight = 250.0; // Thu gọn vì đã xóa tab Auto Click
+    CGFloat menuHeight = 250.0;
     menuContainer = [[UIView alloc] initWithFrame:CGRectMake((targetWindow.bounds.size.width - menuWidth) / 2, 80, menuWidth, menuHeight)];
-    menuContainer.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.15]; // Trong suốt cao
+    menuContainer.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.15]; 
     menuContainer.layer.cornerRadius = 24.0;
     menuContainer.layer.shadowColor = [UIColor blackColor].CGColor;
-    menuContainer.layer.shadowOffset = CGSizeMake(0, 10);
-    menuContainer.layer.shadowOpacity = 0.4;
+    menuContainer.layer.shadowOffset = CGSizeMake(0, 8);
+    menuContainer.layer.shadowOpacity = 0.6;
     menuContainer.layer.shadowRadius = 15.0;
     
     if (@available(iOS 13.0, *)) { menuContainer.layer.cornerCurve = kCACornerCurveContinuous; }
@@ -360,18 +391,25 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     menuBlurView.clipsToBounds = YES;
     [menuContainer addSubview:menuBlurView];
     
-    // Viền sáng bóng nhẹ (Glass reflection)
-    UIView *borderOverlay = [[UIView alloc] initWithFrame:menuContainer.bounds];
-    borderOverlay.layer.cornerRadius = 24.0;
-    borderOverlay.layer.borderWidth = 1.0;
-    borderOverlay.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.2].CGColor;
-    borderOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    borderOverlay.userInteractionEnabled = NO;
-    if (@available(iOS 13.0, *)) { borderOverlay.layer.cornerCurve = kCACornerCurveContinuous; }
-    [menuContainer addSubview:borderOverlay];
+    // Viền RGB Overlay
+    menuBorderOverlay = [[UIView alloc] initWithFrame:menuContainer.bounds];
+    menuBorderOverlay.layer.cornerRadius = 24.0;
+    menuBorderOverlay.layer.borderWidth = 1.5;
+    menuBorderOverlay.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.2].CGColor;
+    menuBorderOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    menuBorderOverlay.userInteractionEnabled = NO;
+    if (@available(iOS 13.0, *)) { menuBorderOverlay.layer.cornerCurve = kCACornerCurveContinuous; }
+    [menuContainer addSubview:menuBorderOverlay];
 
     UIPanGestureRecognizer *panMenu = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragMenu:)];
     [menuContainer addGestureRecognizer:panMenu];
+
+    // Khôi phục vị trí lưu của Menu
+    CGFloat savedMenuX = [defs floatForKey:@"BaconBypass_MenuPosX"];
+    CGFloat savedMenuY = [defs floatForKey:@"BaconBypass_MenuPosY"];
+    if (savedMenuX > 0 && savedMenuY > 0) {
+        menuContainer.center = CGPointMake(savedMenuX, savedMenuY);
+    }
 
     // HEADER KHÔNG NỀN
     UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, menuWidth, 46)];
@@ -1184,16 +1222,33 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     });
 }
 
+// Cử chỉ kéo thả KÈM Lưu vị trí tự động
 + (void)handleDragCircle:(UIPanGestureRecognizer *)g {
     CGPoint trans = [g translationInView:floatingCircleBtn.superview];
     floatingCircleBtn.center = CGPointMake(floatingCircleBtn.center.x + trans.x, floatingCircleBtn.center.y + trans.y);
     [g setTranslation:CGPointZero inView:floatingCircleBtn.superview];
+    
+    // Lưu tọa độ khi thả tay
+    if (g.state == UIGestureRecognizerStateEnded) {
+        NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
+        [defs setFloat:floatingCircleBtn.center.x forKey:@"BaconBypass_CirclePosX"];
+        [defs setFloat:floatingCircleBtn.center.y forKey:@"BaconBypass_CirclePosY"];
+        [defs synchronize];
+    }
 }
 
 + (void)handleDragMenu:(UIPanGestureRecognizer *)g {
     CGPoint trans = [g translationInView:menuContainer.superview];
     menuContainer.center = CGPointMake(menuContainer.center.x + trans.x, menuContainer.center.y + trans.y);
     [g setTranslation:CGPointZero inView:menuContainer.superview];
+    
+    // Lưu tọa độ khi thả tay
+    if (g.state == UIGestureRecognizerStateEnded) {
+        NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
+        [defs setFloat:menuContainer.center.x forKey:@"BaconBypass_MenuPosX"];
+        [defs setFloat:menuContainer.center.y forKey:@"BaconBypass_MenuPosY"];
+        [defs synchronize];
+    }
 }
 
 + (void)handleDragBrowser:(UIPanGestureRecognizer *)g {
