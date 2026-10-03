@@ -1,3 +1,7 @@
 name = "ok"
 main = "worker.js"
 compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "DEVICES_KV"
+id = "4ace079a4bef44adac9daef88c7303be"
