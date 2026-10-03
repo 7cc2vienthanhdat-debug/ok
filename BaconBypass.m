@@ -99,6 +99,24 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 }
 
 // ============================================================
+// BẮT LINK TỰ ĐỘNG TỪ BỘ NHỚ TẠM (HÀM BỊ THIẾU ĐÃ ĐƯỢC THÊM LẠI)
+// ============================================================
++ (void)autoDetectClipboardLink {
+    UIPasteboard *board = [UIPasteboard generalPasteboard];
+    if (board && board.string) {
+        NSString *clip = [board.string stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([clip hasPrefix:@"http://"] || [clip hasPrefix:@"https://"]) {
+            if (linkInput && ![linkInput.text isEqualToString:clip]) {
+                linkInput.text = clip;
+                [self triggerImpact:UIImpactFeedbackStyleLight];
+                resultDisplay.text = @"📋 Đã tự động dán link từ bộ nhớ tạm!";
+                resultDisplay.textColor = [UIColor colorWithRed:0.4 green:0.8 blue:1.0 alpha:1.0];
+            }
+        }
+    }
+}
+
+// ============================================================
 // ĐO RAM & NHIỆT ĐỘ
 // ============================================================
 + (long)getAppMemoryUsageMB {
@@ -592,7 +610,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [resultBox addSubview:resultDisplay];
 
     // ==========================================
-    // KHUNG TAB 2: TIỆN ÍCH (MỚI)
+    // KHUNG TAB 2: TIỆN ÍCH
     // ==========================================
     utilsTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, bodyY, menuWidth, menuHeight - bodyY)];
     utilsTabContainer.hidden = YES;
@@ -1306,7 +1324,9 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     });
 }
 
-// LƯU TỌA ĐỘ NÚT VÀ MENU KHI KÉO THẢ
+// ============================================================
+// LƯU TỌA ĐỘ KHI KÉO THẢ MÀN HÌNH
+// ============================================================
 + (void)handleDragCircle:(UIPanGestureRecognizer *)g {
     CGPoint trans = [g translationInView:floatingCircleBtn.superview];
     floatingCircleBtn.center = CGPointMake(floatingCircleBtn.center.x + trans.x, floatingCircleBtn.center.y + trans.y);
