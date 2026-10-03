@@ -180,12 +180,9 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         [silentAudioPlayer stop];
         silentAudioPlayer = nil;
     }
-    
-    // Hủy hoàn toàn phiên âm thanh, trả quyền cho hệ thống
     AVAudioSession *session = [AVAudioSession sharedInstance];
     [session setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:nil];
 
-    // Trả lại Task Background, ứng dụng sẽ vào trạng thái ngủ đông như mặc định của iOS
     if (bgTaskIdentifier != UIBackgroundTaskInvalid) {
         [[UIApplication sharedApplication] endBackgroundTask:bgTaskIdentifier];
         bgTaskIdentifier = UIBackgroundTaskInvalid;
@@ -202,7 +199,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         btnBackground.backgroundColor = [[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0] colorWithAlphaComponent:0.35];
         btnBackground.layer.borderColor = [UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0].CGColor;
         [self triggerNotify:UINotificationFeedbackTypeSuccess];
-        utilsResultDisplay.text = @"⚡ Đã BẬT Treo Liên Tục! Khi bạn thoát ra hoặc tắt màn hình, game sẽ chạy nền mãi mãi.";
+        utilsResultDisplay.text = @"⚡ Đã BẬT Treo Liên Tục! Khi thoát ra ngoài, game sẽ tiếp tục kết nối mạng.";
         utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
     } else {
         [self stopBackgroundAudio];
@@ -210,7 +207,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         btnBackground.backgroundColor = [[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0] colorWithAlphaComponent:0.25];
         btnBackground.layer.borderColor = [[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0] colorWithAlphaComponent:0.6].CGColor;
         [self triggerNotify:UINotificationFeedbackTypeWarning];
-        utilsResultDisplay.text = @"⏹️ Đã TẮT tính năng treo. Hệ thống đã trở về bình thường. Tắt màn hình hoặc gạt app sẽ văng game sau vài giây.";
+        utilsResultDisplay.text = @"⏹️ Đã TẮT tính năng treo. Hệ thống trở về bình thường (tự ngắt kết nối sau vài giây).";
         utilsResultDisplay.textColor = [UIColor colorWithWhite:0.7 alpha:1.0];
     }
 }
@@ -345,12 +342,44 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 }
 
 // ============================================================
-// VÒNG LẶP RENDER
+// VÒNG LẶP RENDER & CẢM BIẾN CHỐNG VĂNG (LIFECYCLE OBSERVERS)
 // ============================================================
 + (void)startDisplayLoop {
     if (renderLoop) return;
     renderLoop = [CADisplayLink displayLinkWithTarget:self selector:@selector(onRenderFrame:)];
     [renderLoop addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    
+    // --- CHỐNG VĂNG: ĐÓNG BĂNG ĐỒ HỌA KHI VỪA THOÁT RA NỀN ---
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidEnterBackgroundNotification
+                                                      object:nil
+                                                       queue:[NSOperationQueue mainQueue]
+                                                  usingBlock:^(NSNotification * _Nonnull note) {
+        if (renderLoop) renderLoop.paused = YES; // Ngừng vẽ GPU lập tức để chống crash
+        if (isBackgroundRunning && silentAudioPlayer) [silentAudioPlayer play]; // Ép tiếp tục phát nhạc
+    }];
+
+    // --- KHI QUAY LẠI GAME, CHO PHÉP VẼ ĐỒ HỌA TRỞ LẠI ---
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillEnterForegroundNotification
+                                                      object:nil
+                                                       queue:[NSOperationQueue mainQueue]
+                                                  usingBlock:^(NSNotification * _Nonnull note) {
+        if (renderLoop) renderLoop.paused = NO;
+    }];
+
+    // --- CHỐNG MẤT ÂM THANH KHI GAME KHÁC CƯỚP QUYỀN LOA ---
+    [[NSNotificationCenter defaultCenter] addObserverForName:AVAudioSessionInterruptionNotification
+                                                      object:nil
+                                                       queue:[NSOperationQueue mainQueue]
+                                                  usingBlock:^(NSNotification * _Nonnull note) {
+        if (isBackgroundRunning && silentAudioPlayer) {
+            NSNumber *type = note.userInfo[AVAudioSessionInterruptionTypeKey];
+            if (type.unsignedIntegerValue == AVAudioSessionInterruptionTypeEnded) {
+                NSError *err = nil;
+                [[AVAudioSession sharedInstance] setActive:YES error:&err];
+                [silentAudioPlayer play];
+            }
+        }
+    }];
 }
 
 + (void)onRenderFrame:(CADisplayLink *)link {
@@ -401,7 +430,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 }
 
 // ============================================================
-// HÀM TIỆN ÍCH (CROSSHAIR, AFK, RAM CLEANER)
+// HÀM TIỆN ÍCH KHÁC (CROSSHAIR, AFK, RAM CLEANER)
 // ============================================================
 + (void)toggleCrosshair {
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
@@ -707,7 +736,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [resultBox addSubview:resultDisplay];
 
     // ==========================================
-    // KHUNG TAB 2: TIỆN ÍCH
+    // KHUNG TAB 2: TIỆN ÍCH (GỒM NÚT CHẠY NGẦM)
     // ==========================================
     utilsTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, bodyY, menuWidth, menuHeight - bodyY)];
     utilsTabContainer.hidden = YES;
