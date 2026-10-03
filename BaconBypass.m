@@ -8,6 +8,12 @@
 
 @implementation BaconBypassOverlay
 
+// --- CẤU HÌNH ADMIN & API KEY MẶC ĐỊNH ---
+#define ADMIN_PIN @"151009"
+#define DEFAULT_API_KEY @"Bacon-68e61ca9d455d316a50c-b4328879cadc0a77f8a5"
+#define STORAGE_KEY @"BaconBypass_CustomAPIKey"
+#define HISTORY_KEY @"BaconBypass_HistoryLinks"
+
 // --- UI Components ---
 static UIWindow *robloxWindow = nil;
 static UIButton *floatingCircleBtn = nil;
@@ -18,12 +24,20 @@ static WKWebView *miniWebView = nil;
 static UIView *historyContainer = nil;
 static UIScrollView *historyScrollView = nil;
 
-// --- Form Controls ---
+// --- Form Controls & Buttons ---
 static UITextField *apiKeyInput = nil;
 static UIView *keyActionContainer = nil;
 static UITextField *linkInput = nil;
+static UIButton *bypassBtn = nil;
+static UIButton *copyBtn = nil;
+static UIView *resultBox = nil;
 static UITextView *resultDisplay = nil;
+static UIButton *baconWebBtn = nil;
+static UIButton *googleWebBtn = nil;
 static NSString *extractedLink = nil;
+
+// --- Trạng thái Admin ---
+static BOOL isAdminMode = NO;
 
 // --- Performance & RGB Engine ---
 static CADisplayLink *renderLoop = nil;
@@ -31,10 +45,6 @@ static CGFloat currentHue = 0.0;
 static NSInteger frameCount = 0;
 static CFTimeInterval lastFpsTime = 0;
 static NSInteger currentFPS = 60;
-
-#define DEFAULT_API_KEY @"Bacon-68e61ca9d455d316a50c-b4328879cadc0a77f8a5"
-#define STORAGE_KEY @"BaconBypass_CustomAPIKey"
-#define HISTORY_KEY @"BaconBypass_HistoryLinks"
 
 // ============================================================
 // HAPTIC FEEDBACK (RUNG XÚC GIÁC TAPTIC ENGINE)
@@ -174,9 +184,9 @@ static NSInteger currentFPS = 60;
     [self updateInfoWidgetText];
     [targetWindow addSubview:infoWidgetLabel];
 
-    // 3. Khung Menu Chính
+    // 3. Khung Menu Chính (Mặc định ở chế độ Khách: gọn gàng 235px)
     CGFloat menuWidth = 320.0;
-    CGFloat menuHeight = 300.0;
+    CGFloat menuHeight = 235.0;
     menuContainer = [[UIView alloc] initWithFrame:CGRectMake((targetWindow.bounds.size.width - menuWidth) / 2, 100, menuWidth, menuHeight)];
     menuContainer.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.10 alpha:0.97];
     menuContainer.layer.cornerRadius = 14.0;
@@ -197,6 +207,12 @@ static NSInteger currentFPS = 60;
     headerTitle.text = @"⚡ BACON PRO";
     headerTitle.textColor = [UIColor colorWithRed:1.00 green:0.67 blue:0.00 alpha:1.0];
     headerTitle.font = [UIFont boldSystemFontOfSize:13];
+    headerTitle.userInteractionEnabled = YES;
+
+    // CỬ CHỈ BÍ MẬT: BẤM 5 LẦN ĐỂ MỞ / KHÓA ADMIN
+    UITapGestureRecognizer *adminTapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleAdminSecretTap)];
+    adminTapGesture.numberOfTapsRequired = 5;
+    [headerTitle addGestureRecognizer:adminTapGesture];
     [header addSubview:headerTitle];
 
     // Nút mở Web In-App
@@ -238,12 +254,11 @@ static NSInteger currentFPS = 60;
     closeBtn.backgroundColor = [UIColor colorWithRed:0.80 green:0.20 blue:0.20 alpha:1.0];
     closeBtn.layer.cornerRadius = 6.0;
     [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
-    [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     closeBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [closeBtn addTarget:self action:@selector(minimizeMenu) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:closeBtn];
 
-    // Ô nhập API Key
+    // Ô nhập API Key (Mặc định ẩn)
     NSString *savedKey = [[NSUserDefaults standardUserDefaults] stringForKey:STORAGE_KEY];
     if (!savedKey || savedKey.length == 0) savedKey = DEFAULT_API_KEY;
 
@@ -262,9 +277,10 @@ static NSInteger currentFPS = 60;
     apiKeyInput.leftViewMode = UITextFieldViewModeAlways;
     [apiKeyInput addTarget:self action:@selector(onApiKeyEditingChanged) forControlEvents:UIControlEventEditingChanged];
     [apiKeyInput addTarget:self action:@selector(onApiKeyEditingBegan) forControlEvents:UIControlEventEditingDidBegin];
+    apiKeyInput.hidden = YES;
     [menuContainer addSubview:apiKeyInput];
 
-    // Khung nút Lưu / Hủy Key
+    // Khung nút Lưu / Hủy Key (Mặc định ẩn)
     keyActionContainer = [[UIView alloc] initWithFrame:CGRectMake(12, 75, menuWidth - 24, 26)];
     keyActionContainer.backgroundColor = [UIColor clearColor];
     keyActionContainer.hidden = YES;
@@ -290,8 +306,8 @@ static NSInteger currentFPS = 60;
     [keyActionContainer addSubview:discardKeyBtn];
     [menuContainer addSubview:keyActionContainer];
 
-    // Ô nhập link
-    linkInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 106, menuWidth - 24, 32)];
+    // Ô nhập link cần bypass
+    linkInput = [[UITextField alloc] initWithFrame:CGRectMake(12, 46, menuWidth - 24, 32)];
     linkInput.placeholder = @"Dán link cần Bypass vào đây...";
     linkInput.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.22 alpha:1.0];
     linkInput.textColor = [UIColor whiteColor];
@@ -306,8 +322,8 @@ static NSInteger currentFPS = 60;
     [menuContainer addSubview:linkInput];
 
     // Nút Bypass
-    UIButton *bypassBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    bypassBtn.frame = CGRectMake(12, 144, (menuWidth - 30) / 2, 34);
+    bypassBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    bypassBtn.frame = CGRectMake(12, 86, (menuWidth - 30) / 2, 34);
     bypassBtn.backgroundColor = [UIColor colorWithRed:1.00 green:0.67 blue:0.00 alpha:1.0];
     bypassBtn.layer.cornerRadius = 6.0;
     [bypassBtn setTitle:@"Bypass Ngay" forState:UIControlStateNormal];
@@ -317,8 +333,8 @@ static NSInteger currentFPS = 60;
     [menuContainer addSubview:bypassBtn];
 
     // Nút Sao chép
-    UIButton *copyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 6, 144, (menuWidth - 30) / 2, 34);
+    copyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 6, 86, (menuWidth - 30) / 2, 34);
     copyBtn.backgroundColor = [UIColor colorWithRed:0.25 green:0.25 blue:0.35 alpha:1.0];
     copyBtn.layer.cornerRadius = 6.0;
     [copyBtn setTitle:@"Sao Chép" forState:UIControlStateNormal];
@@ -328,12 +344,12 @@ static NSInteger currentFPS = 60;
     [menuContainer addSubview:copyBtn];
 
     // Hộp kết quả
-    UIView *resultBox = [[UIView alloc] initWithFrame:CGRectMake(12, 186, menuWidth - 24, 102)];
+    resultBox = [[UIView alloc] initWithFrame:CGRectMake(12, 128, menuWidth - 24, 95)];
     resultBox.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.06 alpha:1.0];
     resultBox.layer.cornerRadius = 6.0;
     [menuContainer addSubview:resultBox];
 
-    resultDisplay = [[UITextView alloc] initWithFrame:CGRectMake(6, 4, menuWidth - 36, 94)];
+    resultDisplay = [[UITextView alloc] initWithFrame:CGRectMake(6, 4, menuWidth - 36, 87)];
     resultDisplay.text = @"Dán link rồi ấn Bypass Ngay...";
     resultDisplay.textColor = [UIColor colorWithRed:0.6 green:0.6 blue:0.65 alpha:1.0];
     resultDisplay.font = [UIFont systemFontOfSize:11];
@@ -344,11 +360,12 @@ static NSInteger currentFPS = 60;
 
     [targetWindow addSubview:menuContainer];
 
-    // Khởi tạo Trình duyệt Mini In-App
+    // Khởi tạo Trình duyệt Mini & Lịch Sử
     [self setupMiniBrowserInWindow:targetWindow];
-
-    // Khởi tạo Bảng Lịch Sử
     [self setupHistoryOverlayInWindow:targetWindow];
+
+    // Khởi tạo ở chế độ Khách (Guest Layout)
+    [self updateLayoutForAdminState:NO];
 
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
                                                       object:nil
@@ -363,7 +380,91 @@ static NSInteger currentFPS = 60;
 }
 
 // ============================================================
-// TRÌNH DUYỆT MINI: CHỐNG FULLSCREEN VIDEO & CHUYỂN NHANH TRANG
+// ĐIỀU CHỈNH LAYOUT GIỮA CHẾ ĐỘ KHÁCH VÀ ADMIN
+// ============================================================
++ (void)updateLayoutForAdminState:(BOOL)admin {
+    CGFloat menuWidth = 320.0;
+    if (admin) {
+        apiKeyInput.hidden = NO;
+        linkInput.frame = CGRectMake(12, 106, menuWidth - 24, 32);
+        bypassBtn.frame = CGRectMake(12, 144, (menuWidth - 30) / 2, 34);
+        copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 6, 144, (menuWidth - 30) / 2, 34);
+        resultBox.frame = CGRectMake(12, 186, menuWidth - 24, 102);
+        resultDisplay.frame = CGRectMake(6, 4, menuWidth - 36, 94);
+        menuContainer.frame = CGRectMake(menuContainer.frame.origin.x, menuContainer.frame.origin.y, menuWidth, 300.0);
+
+        baconWebBtn.hidden = NO;
+        googleWebBtn.frame = CGRectMake(139, 6, 74, 26);
+    } else {
+        apiKeyInput.hidden = YES;
+        keyActionContainer.hidden = YES;
+        linkInput.frame = CGRectMake(12, 46, menuWidth - 24, 32);
+        bypassBtn.frame = CGRectMake(12, 86, (menuWidth - 30) / 2, 34);
+        copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 6, 86, (menuWidth - 30) / 2, 34);
+        resultBox.frame = CGRectMake(12, 128, menuWidth - 24, 95);
+        resultDisplay.frame = CGRectMake(6, 4, menuWidth - 36, 87);
+        menuContainer.frame = CGRectMake(menuContainer.frame.origin.x, menuContainer.frame.origin.y, menuWidth, 235.0);
+
+        baconWebBtn.hidden = YES;
+        googleWebBtn.frame = CGRectMake(60, 6, 90, 26);
+    }
+}
+
+// ============================================================
+// CỬ CHỈ BÍ MẬT & HỘP THOẠI XÁC NHẬN PIN (151009)
+// ============================================================
++ (void)handleAdminSecretTap {
+    [self triggerImpact:UIImpactFeedbackStyleHeavy];
+    UIViewController *topVC = robloxWindow.rootViewController;
+    while (topVC.presentedViewController) topVC = topVC.presentedViewController;
+    if (!topVC) return;
+
+    if (isAdminMode) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"🛡️ Quản Trị Viên"
+                                                                       message:@"Bạn muốn khóa lại chế độ Quản Trị Viên?"
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Khóa ngay" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
+            isAdminMode = NO;
+            [self updateLayoutForAdminState:NO];
+            [self triggerNotify:UINotificationFeedbackTypeSuccess];
+            resultDisplay.text = @"🔒 Đã khóa chế độ Admin! Chuyển về giao diện Khách.";
+            resultDisplay.textColor = [UIColor colorWithRed:0.8 green:0.8 blue:0.8 alpha:1.0];
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
+        [topVC presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+
+    UIAlertController *pinAlert = [UIAlertController alertControllerWithTitle:@"🔐 Quyền Admin"
+                                                                      message:@"Nhập mật mã để mở bảng quản lý API Key:"
+                                                               preferredStyle:UIAlertControllerStyleAlert];
+    [pinAlert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
+        textField.placeholder = @"Nhập mật mã...";
+        textField.secureTextEntry = YES;
+        textField.keyboardType = UIKeyboardTypeNumberPad;
+    }];
+
+    [pinAlert addAction:[UIAlertAction actionWithTitle:@"Mở khóa" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        NSString *enteredPIN = pinAlert.textFields.firstObject.text;
+        if ([enteredPIN isEqualToString:ADMIN_PIN]) {
+            isAdminMode = YES;
+            [self updateLayoutForAdminState:YES];
+            [self triggerNotify:UINotificationFeedbackTypeSuccess];
+            resultDisplay.text = @"👑 Xin chào Admin! Bạn có thể xem và thay đổi API Key phía trên.";
+            resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
+        } else {
+            [self triggerNotify:UINotificationFeedbackTypeError];
+            resultDisplay.text = @"❌ Mật mã không đúng!";
+            resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
+        }
+    }]];
+
+    [pinAlert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
+    [topVC presentViewController:pinAlert animated:YES completion:nil];
+}
+
+// ============================================================
+// TRÌNH DUYỆT MINI IN-APP
 // ============================================================
 + (void)setupMiniBrowserInWindow:(UIWindow *)window {
     CGFloat bWidth = MIN(window.bounds.size.width - 24, 360.0);
@@ -389,27 +490,27 @@ static NSInteger currentFPS = 60;
     bTitle.font = [UIFont boldSystemFontOfSize:12];
     [bHeader addSubview:bTitle];
 
-    // NÚT 1: CHUYỂN SANG TRANG QUẢN LÝ BACON API KEY
-    UIButton *baconBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    baconBtn.frame = CGRectMake(60, 6, 74, 26);
-    baconBtn.backgroundColor = [UIColor colorWithRed:0.85 green:0.55 blue:0.10 alpha:1.0];
-    baconBtn.layer.cornerRadius = 5.0;
-    [baconBtn setTitle:@"🔑 Bacon" forState:UIControlStateNormal];
-    [baconBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    baconBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
-    [baconBtn addTarget:self action:@selector(openBaconSite) forControlEvents:UIControlEventTouchUpInside];
-    [bHeader addSubview:baconBtn];
+    // Nút Bacon (Chỉ hiện khi là Admin)
+    baconWebBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    baconWebBtn.frame = CGRectMake(60, 6, 74, 26);
+    baconWebBtn.backgroundColor = [UIColor colorWithRed:0.85 green:0.55 blue:0.10 alpha:1.0];
+    baconWebBtn.layer.cornerRadius = 5.0;
+    [baconWebBtn setTitle:@"🔑 Bacon" forState:UIControlStateNormal];
+    [baconWebBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    baconWebBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+    [baconWebBtn addTarget:self action:@selector(openBaconSite) forControlEvents:UIControlEventTouchUpInside];
+    [bHeader addSubview:baconWebBtn];
 
-    // NÚT 2: CHUYỂN SANG GOOGLE (TÌM TIKTOK, YOUTUBE...)
-    UIButton *googleBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    googleBtn.frame = CGRectMake(139, 6, 74, 26);
-    googleBtn.backgroundColor = [UIColor colorWithRed:0.20 green:0.55 blue:0.90 alpha:1.0];
-    googleBtn.layer.cornerRadius = 5.0;
-    [googleBtn setTitle:@"🔍 Google" forState:UIControlStateNormal];
-    [googleBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    googleBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
-    [googleBtn addTarget:self action:@selector(openGoogle) forControlEvents:UIControlEventTouchUpInside];
-    [bHeader addSubview:googleBtn];
+    // Nút Google
+    googleWebBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    googleWebBtn.frame = CGRectMake(139, 6, 74, 26);
+    googleWebBtn.backgroundColor = [UIColor colorWithRed:0.20 green:0.55 blue:0.90 alpha:1.0];
+    googleWebBtn.layer.cornerRadius = 5.0;
+    [googleWebBtn setTitle:@"🔍 Google" forState:UIControlStateNormal];
+    [googleWebBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    googleWebBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+    [googleWebBtn addTarget:self action:@selector(openGoogle) forControlEvents:UIControlEventTouchUpInside];
+    [bHeader addSubview:googleWebBtn];
 
     // Nút Tải lại trang (Reload)
     UIButton *reloadBtn = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -426,19 +527,17 @@ static NSInteger currentFPS = 60;
     closeWebBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
     closeWebBtn.layer.cornerRadius = 5.0;
     [closeWebBtn setTitle:@"✕" forState:UIControlStateNormal];
-    [closeWebBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     closeWebBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [closeWebBtn addTarget:self action:@selector(toggleMiniBrowser) forControlEvents:UIControlEventTouchUpInside];
     [bHeader addSubview:closeWebBtn];
 
-    // CẤU HÌNH WKWebView CHỐNG PHÓNG TO TOÀN MÀN HÌNH
+    // WKWebView chống bung toàn màn hình
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
-    config.allowsInlineMediaPlayback = YES; // Cho phép video phát ngay trong trang
+    config.allowsInlineMediaPlayback = YES;
     if (@available(iOS 10.0, *)) {
         config.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
     }
 
-    // Tự động tiêm script buộc video chạy inline, ngăn chặn mở Fullscreen Player
     NSString *inlineVideoScript = @"(function() { "
                                    "  function setInline(v) { "
                                    "    v.setAttribute('playsinline', ''); "
@@ -472,14 +571,12 @@ static NSInteger currentFPS = 60;
     [window addSubview:miniBrowserContainer];
 }
 
-// Chuyển sang Google
 + (void)openGoogle {
     [self triggerImpact:UIImpactFeedbackStyleLight];
     NSURL *url = [NSURL URLWithString:@"https://www.google.com"];
     [miniWebView loadRequest:[NSURLRequest requestWithURL:url]];
 }
 
-// Chuyển sang trang Quản lý Key / Redeem của Bacon
 + (void)openBaconSite {
     [self triggerImpact:UIImpactFeedbackStyleLight];
     NSURL *url = [NSURL URLWithString:@"https://baconbypass.online"];
@@ -492,7 +589,7 @@ static NSInteger currentFPS = 60;
     if (!miniBrowserContainer.hidden) {
         [robloxWindow bringSubviewToFront:miniBrowserContainer];
         if (!miniWebView.URL) {
-            [self openBaconSite];
+            [self openGoogle];
         }
     }
 }
@@ -531,7 +628,6 @@ static NSInteger currentFPS = 60;
     closeHBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
     closeHBtn.layer.cornerRadius = 6.0;
     [closeHBtn setTitle:@"✕" forState:UIControlStateNormal];
-    [closeHBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     closeHBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [closeHBtn addTarget:self action:@selector(toggleHistory) forControlEvents:UIControlEventTouchUpInside];
     [hHeader addSubview:closeHBtn];
