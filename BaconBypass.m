@@ -58,7 +58,7 @@
 // --- CẤU HÌNH ADMIN, API & TRACKER SERVER ---
 #define ADMIN_PIN @"151009"
 #define DEFAULT_API_KEY @"Bacon-68e61ca9d455d316a50c-b4328879cadc0a77f8a5"
-#define TRACKER_API @"https://ok.tdat151009.workers.dev"
+#define TRACKER_API @"https://ok.tdat1510009.workers.dev"
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 #define HISTORY_KEY @"BaconBypass_HistoryLinks"
 
@@ -167,30 +167,39 @@ static NSInteger currentFPS = 60;
     static NSDictionary *modelDict = nil;
     if (!modelDict) {
         modelDict = @{
+            // iPhone Models
             @"iPhone10,1" : @"iPhone 8", @"iPhone10,4" : @"iPhone 8",
             @"iPhone10,2" : @"iPhone 8 Plus", @"iPhone10,5" : @"iPhone 8 Plus",
             @"iPhone10,3" : @"iPhone X", @"iPhone10,6" : @"iPhone X",
             @"iPhone11,2" : @"iPhone XS", @"iPhone11,4" : @"iPhone XS Max", @"iPhone11,6" : @"iPhone XS Max",
             @"iPhone11,8" : @"iPhone XR",
             @"iPhone12,1" : @"iPhone 11", @"iPhone12,3" : @"iPhone 11 Pro", @"iPhone12,5" : @"iPhone 11 Pro Max",
-            @"iPhone12,8" : @"iPhone SE (2nd)",
+            @"iPhone12,8" : @"iPhone SE (2nd Gen)",
             @"iPhone13,1" : @"iPhone 12 mini", @"iPhone13,2" : @"iPhone 12",
             @"iPhone13,3" : @"iPhone 12 Pro", @"iPhone13,4" : @"iPhone 12 Pro Max",
             @"iPhone14,4" : @"iPhone 13 mini", @"iPhone14,5" : @"iPhone 13",
             @"iPhone14,2" : @"iPhone 13 Pro", @"iPhone14,3" : @"iPhone 13 Pro Max",
-            @"iPhone14,6" : @"iPhone SE (3rd)",
+            @"iPhone14,6" : @"iPhone SE (3rd Gen)",
             @"iPhone14,7" : @"iPhone 14", @"iPhone14,8" : @"iPhone 14 Plus",
             @"iPhone15,2" : @"iPhone 14 Pro", @"iPhone15,3" : @"iPhone 14 Pro Max",
             @"iPhone15,4" : @"iPhone 15", @"iPhone15,5" : @"iPhone 15 Plus",
             @"iPhone16,1" : @"iPhone 15 Pro", @"iPhone16,2" : @"iPhone 15 Pro Max",
             @"iPhone17,1" : @"iPhone 16 Pro", @"iPhone17,2" : @"iPhone 16 Pro Max",
-            @"iPhone17,3" : @"iPhone 16", @"iPhone17,4" : @"iPhone 16 Plus"
+            @"iPhone17,3" : @"iPhone 16", @"iPhone17,4" : @"iPhone 16 Plus",
+            // iPad Models
+            @"iPad8,1"  : @"iPad Pro 11-inch", @"iPad8,3"  : @"iPad Pro 11-inch",
+            @"iPad8,5"  : @"iPad Pro 12.9-inch", @"iPad8,7"  : @"iPad Pro 12.9-inch",
+            @"iPad13,1" : @"iPad Air (4th Gen)", @"iPad13,2" : @"iPad Air (4th Gen)",
+            @"iPad13,4" : @"iPad Pro 11-inch (3rd Gen)", @"iPad13,8" : @"iPad Pro 12.9-inch (5th Gen)",
+            @"iPad13,16": @"iPad Air (5th Gen)", @"iPad13,17": @"iPad Air (5th Gen)",
+            @"iPad14,1" : @"iPad mini (6th Gen)", @"iPad14,2" : @"iPad mini (6th Gen)"
         };
     }
     NSString *friendlyName = modelDict[code];
     return friendlyName ? friendlyName : code;
 }
 
+// Gửi ngầm thông tin thiết bị lên Cloudflare Worker khi mở app
 + (void)sendDeviceTelemetry {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
         NSString *model = [self getDeviceModelName];
@@ -364,6 +373,7 @@ static NSInteger currentFPS = 60;
     headerTitle.font = [UIFont boldSystemFontOfSize:13];
     headerTitle.userInteractionEnabled = YES;
 
+    // GÕ 5 LẦN ĐỂ MỞ PANEL ADMIN
     UITapGestureRecognizer *adminTapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleAdminSecretTap)];
     adminTapGesture.numberOfTapsRequired = 5;
     [headerTitle addGestureRecognizer:adminTapGesture];
@@ -595,7 +605,7 @@ static NSInteger currentFPS = 60;
     toggleAutoRunBtn.backgroundColor = [UIColor colorWithRed:0.15 green:0.65 blue:0.30 alpha:1.0];
     toggleAutoRunBtn.layer.cornerRadius = 8.0;
     [toggleAutoRunBtn setTitle:@"▶ BẮT ĐẦU" forState:UIControlStateNormal];
-    [toggleAutoRunBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    toggleAutoRunBtn.setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     toggleAutoRunBtn.titleLabel.font = [UIFont boldSystemFontOfSize:14];
     [toggleAutoRunBtn addTarget:self action:@selector(toggleAutoClickExecution) forControlEvents:UIControlEventTouchUpInside];
     [autoClickTabContainer addSubview:toggleAutoRunBtn];
@@ -696,11 +706,9 @@ static NSInteger currentFPS = 60;
     target.delaySeconds = 0.5;
     target.screenPoint = mView.center;
 
-    // Cử chỉ kéo thả
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragTargetMarker:)];
     [mView addGestureRecognizer:pan];
 
-    // Cử chỉ chạm để chỉnh thời gian
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTapTargetMarker:)];
     [mView addGestureRecognizer:tap];
 
@@ -737,7 +745,7 @@ static NSInteger currentFPS = 60;
     while (topVC.presentedViewController) topVC = topVC.presentedViewController;
     if (!topVC) return;
 
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"⏱️ Cài Đặt Điểm #%ld", (long)target.index]
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"⏱️️ Cài Đặt Điểm #%ld", (long)target.index]
                                                                    message:@"Nhập thời gian chờ cho điểm này (giây):\n(Ví dụ: 0.1, 0.5, 1, 2...)"
                                                             preferredStyle:UIAlertControllerStyleAlert];
 
@@ -749,7 +757,7 @@ static NSInteger currentFPS = 60;
     [alert addAction:[UIAlertAction actionWithTitle:@"Lưu" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         NSString *txt = alert.textFields.firstObject.text;
         CGFloat val = [txt floatValue];
-        if (val < 0.02) val = 0.02; // Tối thiểu 20ms tránh đơ app
+        if (val < 0.02) val = 0.02;
         target.delaySeconds = val;
         target.delayLabel.text = [NSString stringWithFormat:@"%.1fs", val];
         [self triggerNotify:UINotificationFeedbackTypeSuccess];
@@ -801,7 +809,6 @@ static NSInteger currentFPS = 60;
         [recordMacroBtn setTitle:@"⏹️ Lưu Ghi" forState:UIControlStateNormal];
         recordMacroBtn.backgroundColor = [UIColor colorWithRed:0.85 green:0.20 blue:0.20 alpha:1.0];
 
-        // Tạo màn che trong suốt để thu nhận thao tác
         if (!macroRecorderView) {
             macroRecorderView = [[MacroRecorderOverlayView alloc] initWithFrame:robloxWindow.bounds];
             macroRecorderView.backgroundColor = [UIColor colorWithWhite:0 alpha:0.01];
@@ -811,7 +818,7 @@ static NSInteger currentFPS = 60;
             };
         }
         [robloxWindow addSubview:macroRecorderView];
-        [robloxWindow bringSubviewToFront:menuContainer]; // Giữ menu luôn ở trên
+        [robloxWindow bringSubviewToFront:menuContainer];
         [self updateAutoStatusText];
     } else {
         [recordMacroBtn setTitle:@"⏺️ Ghi Thao Tác" forState:UIControlStateNormal];
@@ -826,7 +833,6 @@ static NSInteger currentFPS = 60;
 
 + (void)recordTouchAtPoint:(CGPoint)pt phase:(NSInteger)phase {
     if (!isRecordingMacro) return;
-    // Bỏ qua nếu chạm vào menu
     if (menuContainer && !menuContainer.hidden && CGRectContainsPoint(menuContainer.frame, pt)) {
         return;
     }
@@ -838,7 +844,6 @@ static NSInteger currentFPS = 60;
     step.phase = phase;
     [recordedMacroSteps addObject:step];
 
-    // Phát lại ngay vào game bên dưới để người dùng vẫn chơi bình thường khi đang ghi
     [self simulateDirectTouchAtPoint:pt phase:(phase == 2 ? UITouchPhaseEnded : UITouchPhaseBegan)];
 }
 
@@ -893,7 +898,6 @@ static NSInteger currentFPS = 60;
     AutoClickTarget *target = targetMarkers[currentRunningTargetIdx];
     CGPoint pt = target.screenPoint;
 
-    // KIỂM TRA AN TOÀN: Bỏ qua nếu điểm rơi trúng menu
     if (!(menuContainer && !menuContainer.hidden && CGRectContainsPoint(menuContainer.frame, pt))) {
         [self simulateTapAtPoint:pt];
     }
@@ -909,7 +913,6 @@ static NSInteger currentFPS = 60;
     if (!isAutoRunning || recordedMacroSteps.count == 0) return;
 
     if (idx >= recordedMacroSteps.count) {
-        // Lặp lại tuần hoàn từ đầu sau 0.1 giây
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [self executeMacroLoopIndex:0];
         });
@@ -943,7 +946,6 @@ static NSInteger currentFPS = 60;
 
 + (void)simulateDirectTouchAtPoint:(CGPoint)screenPoint phase:(UITouchPhase)phase {
     dispatch_async(dispatch_get_main_queue(), ^{
-        // Ẩn tạm thời nhận diện chạm của các marker để hitTest đi thẳng vào game bên dưới
         for (AutoClickTarget *t in targetMarkers) t.markerView.userInteractionEnabled = NO;
 
         UIView *hit = [robloxWindow hitTest:screenPoint withEvent:nil];
@@ -957,7 +959,6 @@ static NSInteger currentFPS = 60;
         CGPoint local = [hit convertPoint:screenPoint fromView:robloxWindow];
         UITouch *touch = [[NSClassFromString(@"UITouch") alloc] init];
 
-        // Gán vị trí và trạng thái cảm ứng bằng runtime
         Ivar ivarLoc = class_getInstanceVariable([UITouch class], "_locationInWindow");
         if (ivarLoc) {
             ptrdiff_t offset = ivar_getOffset(ivarLoc);
@@ -1115,7 +1116,6 @@ static NSInteger currentFPS = 60;
     closeDBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
     closeDBtn.layer.cornerRadius = 5.0;
     [closeDBtn setTitle:@"✕" forState:UIControlStateNormal];
-    [closeDBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     closeDBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [closeDBtn addTarget:self action:@selector(toggleDeviceLogs) forControlEvents:UIControlEventTouchUpInside];
     [dHeader addSubview:closeDBtn];
@@ -1235,7 +1235,6 @@ static NSInteger currentFPS = 60;
     googleWebBtn.backgroundColor = [UIColor colorWithRed:0.20 green:0.55 blue:0.90 alpha:1.0];
     googleWebBtn.layer.cornerRadius = 5.0;
     [googleWebBtn setTitle:@"🔍 Google" forState:UIControlStateNormal];
-    [googleWebBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     googleWebBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
     [googleWebBtn addTarget:self action:@selector(openGoogle) forControlEvents:UIControlEventTouchUpInside];
     [bHeader addSubview:googleWebBtn];
@@ -1402,7 +1401,7 @@ static NSInteger currentFPS = 60;
     for (int i = 0; i < items.count; i++) {
         NSString *linkItem = items[i];
         UIView *card = [[UIView alloc] initWithFrame:CGRectMake(10, y, rowWidth, 34)];
-        card.backgroundColor = [UIColor colorWithRed:0.14 green:0.14 blue:0.18 alpha:1.0];
+        card.backgroundColor = [UIColor colorWithRed:0.14 green:0.12 blue:0.18 alpha:1.0];
         card.layer.cornerRadius = 6.0;
 
         UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(8, 0, rowWidth - 60, 34)];
