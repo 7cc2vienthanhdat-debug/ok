@@ -2,35 +2,35 @@ name: Build iOS Dylib
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: macos-latest
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    - name: Compile Objective-C to iOS arm64 Dylib
-      run: |
-        SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-        clang -dynamiclib \
-              -isysroot "$SDK_PATH" \
-              -arch arm64 \
-              -miphoneos-version-min=14.0 \
-              -fobjc-arc \
-              -framework UIKit \
-              -framework Foundation \
-              -framework CoreGraphics \
-              -framework QuartzCore \
-              -framework WebKit \
-              BaconBypass.m \
-              -o libBaconBypass.dylib
+      - name: Compile Objective-C to iOS arm64 Dylib
+        run: |
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -dynamiclib \
+            -isysroot "$SDK_PATH" \
+            -arch arm64 \
+            -miphoneos-version-min=14.0 \
+            -fobjc-arc \
+            -framework UIKit \
+            -framework Foundation \
+            -framework CoreGraphics \
+            -framework QuartzCore \
+            -framework WebKit \
+            -framework AudioToolbox \
+            BaconBypass.m \
+            -o libBaconBypass.dylib
 
-    - name: Upload Dylib Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: BaconBypass-Dylib
-        path: libBaconBypass.dylib
+      - name: Upload Dylib Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: libBaconBypass
+          path: libBaconBypass.dylib
