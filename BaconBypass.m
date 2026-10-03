@@ -12,7 +12,7 @@
 // --- CẤU HÌNH ADMIN, API & TRACKER SERVER ---
 #define ADMIN_PIN @"151009"
 #define DEFAULT_API_KEY @"Bacon-68e61ca9d455d316a50c-b4328879cadc0a77f8a5"
-#define TRACKER_API @"https://ok.tdat151009.workers.dev" // <-- BẤM NÚT 'VISIT' TRÊN CLOUDFLARE ĐỂ LẤY VÀ THAY VÀO ĐÂY
+#define TRACKER_API @"https://ok.tdat1510009.workers.dev/" // <-- BẤM NÚT 'VISIT' TRÊN CLOUDFLARE ĐỂ LẤY VÀ THAY VÀO ĐÂY
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 #define HISTORY_KEY @"BaconBypass_HistoryLinks"
 
