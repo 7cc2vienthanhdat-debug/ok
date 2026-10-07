@@ -7,13 +7,12 @@
 #import <sys/time.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <AVFoundation/AVFoundation.h>
-#import <CoreLocation/CoreLocation.h>
 #include <dlfcn.h>
 #include <unistd.h>
 #include <stdlib.h>
 
 // ============================================================
-// 1. CHỐNG VĂNG APP & UNIVERSAL SPEEDHACK (DYLD INTERPOSE)
+// 1. CHỐNG VĂNG APP & UNIVERSAL SPEEDHACK
 // ============================================================
 void my_exit(int code) {
     NSLog(@"[BaconAntiCrash] Game gọi exit(%d) -> Đã triệt tiêu!", code);
@@ -30,18 +29,13 @@ void my__exit(int code) {
     return;
 }
 
-// Logic Speedhack (Timescale)
+// Logic Speedhack an toàn (Không dùng dlsym gây Deadlock)
 static double currentSpeedScale = 1.0;
 static uint64_t g_base_mach = 0;
 static uint64_t g_fake_mach = 0;
-typedef uint64_t (*mach_time_fn)(void);
-static mach_time_fn orig_mach_time = NULL;
 
 uint64_t my_mach_absolute_time(void) {
-    if (!orig_mach_time) {
-        orig_mach_time = (mach_time_fn)dlsym(RTLD_NEXT, "mach_absolute_time");
-    }
-    uint64_t real_now = orig_mach_time ? orig_mach_time() : mach_absolute_time();
+    uint64_t real_now = mach_absolute_time();
     if (currentSpeedScale == 1.0) {
         return real_now;
     }
@@ -58,14 +52,9 @@ uint64_t my_mach_absolute_time(void) {
 
 static struct timeval g_base_tv = {0, 0};
 static struct timeval g_fake_tv = {0, 0};
-typedef int (*gettimeofday_fn)(struct timeval *, struct timezone *);
-static gettimeofday_fn orig_gettimeofday = NULL;
 
 int my_gettimeofday(struct timeval *tv, struct timezone *tz) {
-    if (!orig_gettimeofday) {
-        orig_gettimeofday = (gettimeofday_fn)dlsym(RTLD_NEXT, "gettimeofday");
-    }
-    int res = orig_gettimeofday ? orig_gettimeofday(tv, tz) : gettimeofday(tv, tz);
+    int res = gettimeofday(tv, tz);
     if (res != 0 || currentSpeedScale == 1.0 || tv == NULL) {
         return res;
     }
@@ -128,36 +117,7 @@ DYLD_INTERPOSE(my_gettimeofday, gettimeofday)
 @end
 
 // ============================================================
-// 3. RETINA DOWNSAMPLER (GIẢM ĐỘ PHÂN GIẢI RENDER ĐỒ HỌA)
-// ============================================================
-static CGFloat currentResolutionScale = 1.0;
-
-@interface UIView (BaconDownsample)
-@end
-
-@implementation UIView (BaconDownsample)
-+ (void)load {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        Class cls = [UIView class];
-        SEL origSel = @selector(setContentScaleFactor:);
-        SEL swizzSel = @selector(bacon_setContentScaleFactor:);
-        Method origM = class_getInstanceMethod(cls, origSel);
-        Method swizzM = class_getInstanceMethod(cls, swizzSel);
-        if (origM && swizzM) method_exchangeImplementations(origM, swizzM);
-    });
-}
-
-- (void)bacon_setContentScaleFactor:(CGFloat)factor {
-    if (currentResolutionScale < 1.0 && currentResolutionScale > 0.1) {
-        factor = factor * currentResolutionScale;
-    }
-    [self bacon_setContentScaleFactor:factor];
-}
-@end
-
-// ============================================================
-// 4. REROLL TÀI KHOẢN & SPOOF IDFV
+// 3. REROLL TÀI KHOẢN & SPOOF IDFV
 // ============================================================
 static NSString *spoofedIDFVString = nil;
 
@@ -186,39 +146,7 @@ static NSString *spoofedIDFVString = nil;
 @end
 
 // ============================================================
-// 5. UNIVERSAL LOCATION SPOOFING (FAKE GPS)
-// ============================================================
-static BOOL isFakeGPSActive = NO;
-static double fakeLatitude = 21.028511; 
-static double fakeLongitude = 105.854444;
-
-@interface CLLocationManager (BaconFakeGPS)
-@end
-
-@implementation CLLocationManager (BaconFakeGPS)
-+ (void)load {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        Class cls = [CLLocationManager class];
-        SEL origSel = @selector(location);
-        SEL swizzSel = @selector(bacon_location);
-        Method origM = class_getInstanceMethod(cls, origSel);
-        Method swizzM = class_getInstanceMethod(cls, swizzSel);
-        if (origM && swizzM) method_exchangeImplementations(origM, swizzM);
-    });
-}
-
-- (CLLocation *)bacon_location {
-    if (isFakeGPSActive) {
-        CLLocationCoordinate2D coord = CLLocationCoordinate2DMake(fakeLatitude, fakeLongitude);
-        return [[CLLocation alloc] initWithCoordinate:coord altitude:15.0 horizontalAccuracy:5.0 verticalAccuracy:5.0 timestamp:[NSDate date]];
-    }
-    return [self bacon_location];
-}
-@end
-
-// ============================================================
-// 6. QUẢN LÝ TAB WEB NỔI (FLOATING WEB BUBBLE)
+// 4. QUẢN LÝ TAB WEB NỔI (FLOATING WEB BUBBLE)
 // ============================================================
 @interface BaconWebTab : NSObject
 @property (nonatomic, assign) NSInteger tabId;
@@ -236,7 +164,7 @@ static double fakeLongitude = 105.854444;
 @end
 
 // ============================================================
-// 7. MAIN CONTROLLER VÀ GIAO DIỆN HỆ THỐNG
+// 5. MAIN CONTROLLER VÀ GIAO DIỆN HỆ THỐNG
 // ============================================================
 @interface BaconBypassOverlay : NSObject <WKNavigationDelegate>
 + (void)load;
@@ -289,6 +217,7 @@ static UIView *crosshairContainer = nil;
 static UIView *afkOverlay = nil;
 static UIView *ultraDimOverlay = nil;
 static BOOL isUltraDimActive = NO;
+static CGFloat currentResolutionScale = 1.0;
 
 // Nút bấm tiện ích
 static UIButton *btnBackground = nil;
@@ -298,7 +227,6 @@ static UIButton *btnSpeedhack = nil;
 static UIButton *btnDownsample = nil;
 static UIButton *btnUltraDim = nil;
 static UIButton *btnResetIDFV = nil;
-static UIButton *btnFakeGPS = nil;
 
 static BOOL isBackgroundRunning = NO;
 static BOOL isGameAudioMuted = NO;
@@ -428,6 +356,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     if (nativeScale <= 0) nativeScale = [UIScreen mainScreen].scale;
     CGFloat targetScale = nativeScale * currentResolutionScale;
 
+    // Fix văng: Chỉ áp dụng scale qua main queue, không hook trực tiếp UIView
     dispatch_async(dispatch_get_main_queue(), ^{
         for (UIWindow *win in [UIApplication sharedApplication].windows) {
             win.contentScaleFactor = targetScale;
@@ -436,7 +365,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     });
 
     [self triggerNotify:UINotificationFeedbackTypeSuccess];
-    utilsResultDisplay.text = [NSString stringWithFormat:@"🖥️ Đã chỉnh độ phân giải: %d%% (GPU cực mát khi treo máy)!", pct];
+    utilsResultDisplay.text = [NSString stringWithFormat:@"🖥️ Đã chỉnh độ phân giải: %d%% (Giúp GPU cực mát khi treo máy)!", pct];
     utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
 }
 
@@ -494,63 +423,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [self triggerNotify:UINotificationFeedbackTypeSuccess];
     utilsResultDisplay.text = [NSString stringWithFormat:@"🎲 Đã Reroll ID thiết bị & Xóa Cache!\nUUID mới: %@", spoofedIDFVString];
     utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
-}
-
-+ (void)toggleFakeGPS {
-    [self triggerImpact:UIImpactFeedbackStyleMedium];
-    isFakeGPSActive = !isFakeGPSActive;
-    if (isFakeGPSActive) {
-        [btnFakeGPS setTitle:@"📍 Fake GPS: BẬT" forState:UIControlStateNormal];
-        btnFakeGPS.backgroundColor = [[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0] colorWithAlphaComponent:0.35];
-        btnFakeGPS.layer.borderColor = [UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0].CGColor;
-        [self triggerNotify:UINotificationFeedbackTypeSuccess];
-        utilsResultDisplay.text = [NSString stringWithFormat:@"📍 Đã BẬT Fake GPS!\nTọa độ: %.5f, %.5f (Nhấn giữ nút để đổi)", fakeLatitude, fakeLongitude];
-        utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
-    } else {
-        [btnFakeGPS setTitle:@"📍 Fake GPS: TẮT" forState:UIControlStateNormal];
-        btnFakeGPS.backgroundColor = [[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0] colorWithAlphaComponent:0.25];
-        btnFakeGPS.layer.borderColor = [[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0] colorWithAlphaComponent:0.6].CGColor;
-        [self triggerNotify:UINotificationFeedbackTypeWarning];
-        utilsResultDisplay.text = @"⏹️ Đã TẮT Fake GPS. Trả về vị trí thực.";
-        utilsResultDisplay.textColor = [UIColor colorWithWhite:0.7 alpha:1.0];
-    }
-}
-
-+ (void)promptChangeGPSCoordinates {
-    [self triggerImpact:UIImpactFeedbackStyleLight];
-    UIViewController *topVC = robloxWindow.rootViewController;
-    while (topVC.presentedViewController) topVC = topVC.presentedViewController;
-    if (!topVC) return;
-
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"📍 Cài Đặt Tọa Độ Fake GPS" message:@"Nhập Vĩ độ (Lat) và Kinh độ (Lon):" preferredStyle:UIAlertControllerStyleAlert];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
-        textField.placeholder = @"Vĩ độ (Ví dụ: 21.0285)";
-        textField.keyboardType = UIKeyboardTypeDecimalPad;
-        textField.text = [NSString stringWithFormat:@"%.5f", fakeLatitude];
-    }];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
-        textField.placeholder = @"Kinh độ (Ví dụ: 105.8544)";
-        textField.keyboardType = UIKeyboardTypeDecimalPad;
-        textField.text = [NSString stringWithFormat:@"%.5f", fakeLongitude];
-    }];
-
-    [alert addAction:[UIAlertAction actionWithTitle:@"Lưu Tọa Độ" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        NSString *latStr = alert.textFields[0].text;
-        NSString *lonStr = alert.textFields[1].text;
-        if (latStr.length > 0 && lonStr.length > 0) {
-            fakeLatitude = [latStr doubleValue];
-            fakeLongitude = [lonStr doubleValue];
-            isFakeGPSActive = YES;
-            [btnFakeGPS setTitle:@"📍 Fake GPS: BẬT" forState:UIControlStateNormal];
-            btnFakeGPS.backgroundColor = [[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0] colorWithAlphaComponent:0.35];
-            btnFakeGPS.layer.borderColor = [UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0].CGColor;
-            [self triggerNotify:UINotificationFeedbackTypeSuccess];
-            utilsResultDisplay.text = [NSString stringWithFormat:@"📍 Tọa độ mới:\nLat: %.5f | Lon: %.5f", fakeLatitude, fakeLongitude];
-            utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
-        }
-    }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
-    [topVC presentViewController:alert animated:YES completion:nil];
 }
 
 + (void)toggleMuteGameAudio {
@@ -1458,15 +1330,8 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [btnResetIDFV addTarget:self action:@selector(performQuickAccountReset) forControlEvents:UIControlEventTouchUpInside];
     [utilsScrollView addSubview:btnResetIDFV];
 
-    // Hàng 6: Fake GPS (Bấm bật/tắt, nhấn giữ để chỉnh tọa độ)
-    btnFakeGPS = [self createGlassButtonWithFrame:CGRectMake(16, 194, menuWidth - 32, 34) title:@"📍 Fake GPS: TẮT (Giữ để đổi tọa độ)" color:[UIColor colorWithRed:0.2 green:0.8 blue:0.5 alpha:1.0]];
-    [btnFakeGPS addTarget:self action:@selector(toggleFakeGPS) forControlEvents:UIControlEventTouchUpInside];
-    UILongPressGestureRecognizer *gpsLongPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(promptChangeGPSCoordinates)];
-    [btnFakeGPS addGestureRecognizer:gpsLongPress];
-    [utilsScrollView addSubview:btnFakeGPS];
-
     // Khung kết quả hiển thị
-    UIView *uResultBox = [[UIView alloc] initWithFrame:CGRectMake(16, 234, menuWidth - 32, 60)];
+    UIView *uResultBox = [[UIView alloc] initWithFrame:CGRectMake(16, 194, menuWidth - 32, 60)];
     uResultBox.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.25];
     uResultBox.layer.cornerRadius = 10.0;
     uResultBox.layer.borderWidth = 1.0;
@@ -1482,7 +1347,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     utilsResultDisplay.selectable = YES;
     [uResultBox addSubview:utilsResultDisplay];
 
-    utilsScrollView.contentSize = CGSizeMake(menuWidth, 305);
+    utilsScrollView.contentSize = CGSizeMake(menuWidth, 265);
 
     [targetWindow addSubview:menuContainer];
 
@@ -1662,6 +1527,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 
     deviceLogsScrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 36, dWidth, dHeight - 36)];
     [deviceLogsContainer addSubview:deviceLogsScrollView];
+
     [window addSubview:deviceLogsContainer];
 }
 
@@ -1816,6 +1682,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 
     historyScrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 36, hWidth, hHeight - 36)];
     [historyContainer addSubview:historyScrollView];
+
     [window addSubview:historyContainer];
 }
 
