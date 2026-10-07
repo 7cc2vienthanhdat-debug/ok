@@ -5,21 +5,99 @@
 #import <mach/mach.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <AVFoundation/AVFoundation.h>
+#include <dlfcn.h>
+#include <unistd.h>
+#include <stdlib.h>
 
+// ============================================================
+// 1. TẦNG BẢO VỆ CHỐNG VĂNG: CHẶN LỆNH TỰ NGẮT (EXIT / ABORT)
+// ============================================================
+void my_exit(int code) {
+    NSLog(@"[BaconAntiCrash] Game cố tình gọi exit(%d) -> Đã triệt tiêu lệnh đóng app!", code);
+    return;
+}
+
+void my_abort(void) {
+    NSLog(@"[BaconAntiCrash] Game cố tình gọi abort() -> Đã triệt tiêu lệnh đóng app!");
+    return;
+}
+
+void my__exit(int code) {
+    NSLog(@"[BaconAntiCrash] Game cố tình gọi _exit(%d) -> Đã triệt tiêu lệnh đóng app!", code);
+    return;
+}
+
+#define DYLD_INTERPOSE(_replacement,_replacee) \
+   __attribute__((used)) static struct{ const void* replacement; const void* replacee; } _interpose_##_replacee \
+            __attribute__((section ("__DATA,__interpose"))) = { (const void*)(unsigned long)&_replacement, (const void*)(unsigned long)&_replacee };
+
+DYLD_INTERPOSE(my_exit, exit)
+DYLD_INTERPOSE(my_abort, abort)
+DYLD_INTERPOSE(my__exit, _exit)
+
+// ============================================================
+// 2. FAKE BIÊN LAI APP STORE & CHE GIẤU DẤU VẾT SIDELOAD
+// ============================================================
+@interface NSFileManager (BaconAntiCrash)
+@end
+
+@implementation NSFileManager (BaconAntiCrash)
+
++ (void)load {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        Class cls = [NSFileManager class];
+        SEL origSel = @selector(fileExistsAtPath:);
+        SEL swizzSel = @selector(bacon_fileExistsAtPath:);
+
+        Method origMethod = class_getInstanceMethod(cls, origSel);
+        Method swizzMethod = class_getInstanceMethod(cls, swizzSel);
+
+        if (origMethod && swizzMethod) {
+            method_exchangeImplementations(origMethod, swizzMethod);
+        }
+    });
+}
+
+- (BOOL)bacon_fileExistsAtPath:(NSString *)path {
+    if (!path) return NO;
+
+    // Giả lập biên lai hợp lệ của App Store
+    if ([path containsString:@"_MASReceipt"] || 
+        [path containsString:@"receipt"] || 
+        [path containsString:@"embedded.mobileprovision"]) {
+        return YES;
+    }
+
+    // Ẩn các file quét môi trường sideload/jailbreak
+    if ([path containsString:@"Cydia"] || 
+        [path containsString:@"Sileo"] || 
+        [path containsString:@"TrollStore"] || 
+        [path containsString:@"bin/bash"] ||
+        [path containsString:@"/Library/MobileSubstrate"]) {
+        return NO;
+    }
+
+    return [self bacon_fileExistsAtPath:path];
+}
+
+@end
+
+// ============================================================
+// 3. GIAO DIỆN & TÍNH NĂNG CHÍNH CỦA BACONBYPASS
+// ============================================================
 @interface BaconBypassOverlay : NSObject <WKNavigationDelegate>
 + (void)load;
 @end
 
 @implementation BaconBypassOverlay
 
-// --- CẤU HÌNH ADMIN & API ---
 #define ADMIN_PIN @"151009"
 #define DEFAULT_API_KEY @"Bacon-68e61ca9d455d316a50c-b4328879cadc0a77f8a5"
 #define TRACKER_API @"https://ok.tdat1510009.workers.dev"
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 #define HISTORY_KEY @"BaconBypass_HistoryLinks"
 
-// --- UI Components Chung ---
 static UIWindow *robloxWindow = nil;
 static UIButton *floatingCircleBtn = nil;
 static UIView *menuContainer = nil;
@@ -28,7 +106,6 @@ static UIView *menuBorderOverlay = nil;
 static UIView *menuDashboardBar = nil;
 static UILabel *hudInfoLabel = nil;
 
-// Web & Lịch sử & Logs
 static WKWebView *miniWebView = nil;
 static UIView *miniBrowserContainer = nil;
 static UIView *historyContainer = nil;
@@ -36,7 +113,6 @@ static UIScrollView *historyScrollView = nil;
 static UIView *deviceLogsContainer = nil;
 static UIScrollView *deviceLogsScrollView = nil;
 
-// --- Form Controls Bypass ---
 static UIButton *tabSwitchBtn = nil;
 static BOOL isUtilsTabActive = NO;
 static UIView *bypassTabContainer = nil;
@@ -53,7 +129,6 @@ static UIButton *viewDevicesBtn = nil;
 static UIButton *killswitchBtn = nil;
 static NSString *extractedLink = nil;
 
-// --- Tiện Ích Mở Rộng ---
 static UIView *utilsTabContainer = nil;
 static UITextView *utilsResultDisplay = nil;
 static UIView *crosshairContainer = nil;
@@ -63,11 +138,9 @@ static BOOL isBackgroundRunning = NO;
 static AVAudioPlayer *silentAudioPlayer = nil;
 static UIBackgroundTaskIdentifier bgTaskIdentifier; 
 
-// --- Trạng thái Admin & Killswitch ---
 static BOOL isAdminMode = NO;
 static BOOL isServerKillswitchActive = NO;
 
-// --- Performance, RAM, Nhiệt Độ ---
 static CADisplayLink *renderLoop = nil;
 static CGFloat currentHue = 0.0;
 static NSInteger frameCount = 0;
@@ -76,9 +149,6 @@ static NSInteger currentFPS = 60;
 static long currentAppRamMB = 0;
 static NSString *currentThermalStatus = @"❄️ Mát";
 
-// ============================================================
-// HAPTIC FEEDBACK & UI SOUNDS
-// ============================================================
 + (void)triggerImpact:(UIImpactFeedbackStyle)style {
     dispatch_async(dispatch_get_main_queue(), ^{
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
@@ -118,9 +188,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }
 }
 
-// ============================================================
-// TÍNH NĂNG CHẠY NGẦM (BACKGROUND EXECUTION)
-// ============================================================
 + (NSData *)generateSilentWavData {
     NSMutableData *data = [NSMutableData data];
     int sampleRate = 44100;
@@ -212,9 +279,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }
 }
 
-// ============================================================
-// ĐO RAM & NHIỆT ĐỘ
-// ============================================================
 + (long)getAppMemoryUsageMB {
     struct mach_task_basic_info info;
     mach_msg_type_number_t size = MACH_TASK_BASIC_INFO_COUNT;
@@ -237,9 +301,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     return @"❄️ Mát";
 }
 
-// ============================================================
-// THÔNG TIN THIẾT BỊ VÀ TELEMETRY CLOUDFLARE
-// ============================================================
 + (NSString *)getDeviceModelName {
     struct utsname systemInfo;
     uname(&systemInfo);
@@ -301,9 +362,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }
 }
 
-// ============================================================
-// KHỞI CHẠY HỆ THỐNG
-// ============================================================
 + (void)load {
     bgTaskIdentifier = UIBackgroundTaskInvalid; 
     [UIDevice currentDevice].batteryMonitoringEnabled = YES;
@@ -341,24 +399,19 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [self startDisplayLoop];
 }
 
-// ============================================================
-// VÒNG LẶP RENDER & CẢM BIẾN CHỐNG VĂNG (LIFECYCLE OBSERVERS)
-// ============================================================
 + (void)startDisplayLoop {
     if (renderLoop) return;
     renderLoop = [CADisplayLink displayLinkWithTarget:self selector:@selector(onRenderFrame:)];
     [renderLoop addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
     
-    // --- CHỐNG VĂNG: ĐÓNG BĂNG ĐỒ HỌA KHI VỪA THOÁT RA NỀN ---
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidEnterBackgroundNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
                                                   usingBlock:^(NSNotification * _Nonnull note) {
-        if (renderLoop) renderLoop.paused = YES; // Ngừng vẽ GPU lập tức để chống crash
-        if (isBackgroundRunning && silentAudioPlayer) [silentAudioPlayer play]; // Ép tiếp tục phát nhạc
+        if (renderLoop) renderLoop.paused = YES; 
+        if (isBackgroundRunning && silentAudioPlayer) [silentAudioPlayer play];
     }];
 
-    // --- KHI QUAY LẠI GAME, CHO PHÉP VẼ ĐỒ HỌA TRỞ LẠI ---
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillEnterForegroundNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
@@ -366,7 +419,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         if (renderLoop) renderLoop.paused = NO;
     }];
 
-    // --- CHỐNG MẤT ÂM THANH KHI GAME KHÁC CƯỚP QUYỀN LOA ---
     [[NSNotificationCenter defaultCenter] addObserverForName:AVAudioSessionInterruptionNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
@@ -429,9 +481,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     return btn;
 }
 
-// ============================================================
-// HÀM TIỆN ÍCH KHÁC (CROSSHAIR, AFK, RAM CLEANER)
-// ============================================================
 + (void)toggleCrosshair {
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
     if (!crosshairContainer) {
@@ -520,9 +569,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
 }
 
-// ============================================================
-// THIẾT KẾ GIAO DIỆN (UI)
-// ============================================================
 + (void)setupViewsInWindow:(UIWindow *)targetWindow {
     floatingCircleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     floatingCircleBtn.frame = CGRectMake(25, 120, 42, 42);
@@ -640,9 +686,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     hudInfoLabel.textAlignment = NSTextAlignmentCenter;
     [menuDashboardBar addSubview:hudInfoLabel];
 
-    // ==========================================
-    // KHUNG TAB 1: BYPASS CHÍNH
-    // ==========================================
     CGFloat bodyY = 82; 
     bypassTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, bodyY, menuWidth, menuHeight - bodyY)];
     [menuContainer addSubview:bypassTabContainer];
@@ -735,9 +778,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     resultDisplay.selectable = YES;
     [resultBox addSubview:resultDisplay];
 
-    // ==========================================
-    // KHUNG TAB 2: TIỆN ÍCH (GỒM NÚT CHẠY NGẦM)
-    // ==========================================
     utilsTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, bodyY, menuWidth, menuHeight - bodyY)];
     utilsTabContainer.hidden = YES;
     [menuContainer addSubview:utilsTabContainer];
@@ -800,9 +840,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }];
 }
 
-// ============================================================
-// CHUYỂN ĐỔI TAB BẰNG NÚT BẤM
-// ============================================================
 + (void)toggleTabs {
     [self triggerImpact:UIImpactFeedbackStyleLight];
     isUtilsTabActive = !isUtilsTabActive;
@@ -823,9 +860,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }
 }
 
-// ============================================================
-// CẬP NHẬT GIAO DIỆN (ADMIN & KHÁCH)
-// ============================================================
 + (void)updateLayoutForAdminState:(BOOL)admin {
     CGFloat menuWidth = 340.0;
     if (admin) {
@@ -923,9 +957,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }] resume];
 }
 
-// ============================================================
-// BẢNG THIẾT BỊ LOGS
-// ============================================================
 + (void)setupDeviceLogsOverlayInWindow:(UIWindow *)window {
     CGFloat dWidth = 320.0;
     CGFloat dHeight = 300.0;
@@ -960,7 +991,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     closeDBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
     closeDBtn.layer.cornerRadius = 5.0;
     [closeDBtn setTitle:@"✕" forState:UIControlStateNormal];
-    [closeDBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     closeDBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [closeDBtn addTarget:self action:@selector(toggleDeviceLogs) forControlEvents:UIControlEventTouchUpInside];
     [dHeader addSubview:closeDBtn];
@@ -1090,9 +1120,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }] resume];
 }
 
-// ============================================================
-// TRÌNH DUYỆT MINI IN-APP
-// ============================================================
 + (void)setupMiniBrowserInWindow:(UIWindow *)window {
     CGFloat bWidth = MIN(window.bounds.size.width - 24, 360.0);
     CGFloat bHeight = 440.0;
@@ -1189,9 +1216,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [miniWebView reload];
 }
 
-// ============================================================
-// BẢNG LỊCH SỬ LINK
-// ============================================================
 + (void)setupHistoryOverlayInWindow:(UIWindow *)window {
     CGFloat hWidth = 310.0;
     CGFloat hHeight = 240.0;
@@ -1305,9 +1329,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }
 }
 
-// ============================================================
-// XỬ LÝ SỰ KIỆN MENU
-// ============================================================
 + (void)openMenu {
     [self triggerImpact:UIImpactFeedbackStyleMedium];
     menuContainer.hidden = NO;
@@ -1455,9 +1476,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     });
 }
 
-// ============================================================
-// LƯU TỌA ĐỘ KHI KÉO THẢ MÀN HÌNH
-// ============================================================
 + (void)handleDragCircle:(UIPanGestureRecognizer *)g {
     CGPoint trans = [g translationInView:floatingCircleBtn.superview];
     floatingCircleBtn.center = CGPointMake(floatingCircleBtn.center.x + trans.x, floatingCircleBtn.center.y + trans.y);
