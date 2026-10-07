@@ -101,6 +101,7 @@ DYLD_INTERPOSE(my__exit, _exit)
 // ============================================================
 @interface BaconBypassOverlay : NSObject <WKNavigationDelegate>
 + (void)load;
++ (void)autoDetectClipboardLink; // Khai báo hàm để fix lỗi biên dịch
 @end
 
 @implementation BaconBypassOverlay
@@ -198,6 +199,21 @@ static NSString *currentThermalStatus = @"❄️ Mát";
             AudioServicesPlaySystemSound(1057); 
         }
     });
+}
+
++ (void)autoDetectClipboardLink {
+    UIPasteboard *board = [UIPasteboard generalPasteboard];
+    if (board && board.string) {
+        NSString *clip = [board.string stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([clip hasPrefix:@"http://"] || [clip hasPrefix:@"https://"]) {
+            if (linkInput && ![linkInput.text isEqualToString:clip]) {
+                linkInput.text = clip;
+                [self triggerImpact:UIImpactFeedbackStyleLight];
+                resultDisplay.text = @"📋 Đã tự động dán link từ bộ nhớ tạm!";
+                resultDisplay.textColor = [UIColor colorWithRed:0.4 green:0.8 blue:1.0 alpha:1.0];
+            }
+        }
+    }
 }
 
 // ============================================================
@@ -1241,6 +1257,14 @@ static NSString *currentThermalStatus = @"❄️ Mát";
             [robloxWindow bringSubviewToFront:crosshairContainer];
             [robloxWindow bringSubviewToFront:floatingCircleBtn];
             [robloxWindow bringSubviewToFront:menuContainer];
+            
+            // Đưa tất cả các Web Window và Bóng Web lên trên cùng
+            if (webTabsList) {
+                for (BaconWebTab *tab in webTabsList) {
+                    if (!tab.isMinimized) [robloxWindow bringSubviewToFront:tab.windowView];
+                    if (tab.isMinimized) [robloxWindow bringSubviewToFront:tab.bubbleBtn];
+                }
+            }
         }
         if (menuContainer && !menuContainer.hidden && !isUtilsTabActive) {
             [self autoDetectClipboardLink];
@@ -1359,9 +1383,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }] resume];
 }
 
-// ============================================================
-// BẢNG THIẾT BỊ LOGS
-// ============================================================
 + (void)setupDeviceLogsOverlayInWindow:(UIWindow *)window {
     CGFloat dWidth = 320.0;
     CGFloat dHeight = 300.0;
@@ -1526,9 +1547,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }] resume];
 }
 
-// ============================================================
-// BẢNG LỊCH SỬ LINK
-// ============================================================
 + (void)setupHistoryOverlayInWindow:(UIWindow *)window {
     CGFloat hWidth = 310.0;
     CGFloat hHeight = 240.0;
@@ -1642,9 +1660,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }
 }
 
-// ============================================================
-// XỬ LÝ SỰ KIỆN MENU
-// ============================================================
 + (void)openMenu {
     [self triggerImpact:UIImpactFeedbackStyleMedium];
     menuContainer.hidden = NO;
