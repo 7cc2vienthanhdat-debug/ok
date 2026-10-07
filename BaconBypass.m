@@ -13,17 +13,17 @@
 // 1. TẦNG BẢO VỆ CHỐNG VĂNG: CHẶN LỆNH TỰ NGẮT (EXIT / ABORT)
 // ============================================================
 void my_exit(int code) {
-    NSLog(@"[BaconAntiCrash] Game cố tình gọi exit(%d) -> Đã triệt tiêu lệnh đóng app!", code);
+    NSLog(@"[BaconAntiCrash] Game gọi exit(%d) -> Đã triệt tiêu lệnh đóng app!", code);
     return;
 }
 
 void my_abort(void) {
-    NSLog(@"[BaconAntiCrash] Game cố tình gọi abort() -> Đã triệt tiêu lệnh đóng app!");
+    NSLog(@"[BaconAntiCrash] Game gọi abort() -> Đã triệt tiêu lệnh đóng app!");
     return;
 }
 
 void my__exit(int code) {
-    NSLog(@"[BaconAntiCrash] Game cố tình gọi _exit(%d) -> Đã triệt tiêu lệnh đóng app!", code);
+    NSLog(@"[BaconAntiCrash] Game gọi _exit(%d) -> Đã triệt tiêu lệnh đóng app!", code);
     return;
 }
 
@@ -61,15 +61,11 @@ DYLD_INTERPOSE(my__exit, _exit)
 
 - (BOOL)bacon_fileExistsAtPath:(NSString *)path {
     if (!path) return NO;
-
-    // Giả lập biên lai hợp lệ của App Store
     if ([path containsString:@"_MASReceipt"] || 
         [path containsString:@"receipt"] || 
         [path containsString:@"embedded.mobileprovision"]) {
         return YES;
     }
-
-    // Ẩn các file quét môi trường sideload/jailbreak
     if ([path containsString:@"Cydia"] || 
         [path containsString:@"Sileo"] || 
         [path containsString:@"TrollStore"] || 
@@ -77,14 +73,31 @@ DYLD_INTERPOSE(my__exit, _exit)
         [path containsString:@"/Library/MobileSubstrate"]) {
         return NO;
     }
-
     return [self bacon_fileExistsAtPath:path];
 }
 
 @end
 
 // ============================================================
-// 3. GIAO DIỆN & TÍNH NĂNG CHÍNH CỦA BACONBYPASS
+// 3. ĐỐI TƯỢNG QUẢN LÝ TAB WEB NỔI (FLOATING WEB BUBBLE)
+// ============================================================
+@interface BaconWebTab : NSObject
+@property (nonatomic, assign) NSInteger tabId;
+@property (nonatomic, strong) NSString *title;
+@property (nonatomic, strong) NSString *iconText;
+@property (nonatomic, strong) UIColor *themeColor;
+@property (nonatomic, strong) WKWebView *webView;
+@property (nonatomic, strong) UIView *windowView;
+@property (nonatomic, strong) UIButton *bubbleBtn;
+@property (nonatomic, strong) UITextField *urlField;
+@property (nonatomic, assign) BOOL isMinimized;
+@end
+
+@implementation BaconWebTab
+@end
+
+// ============================================================
+// 4. MAIN CONTROLLER VÀ GIAO DIỆN HỆ THỐNG
 // ============================================================
 @interface BaconBypassOverlay : NSObject <WKNavigationDelegate>
 + (void)load;
@@ -106,13 +119,17 @@ static UIView *menuBorderOverlay = nil;
 static UIView *menuDashboardBar = nil;
 static UILabel *hudInfoLabel = nil;
 
-static WKWebView *miniWebView = nil;
-static UIView *miniBrowserContainer = nil;
+// Web Multi-tabs
+static NSMutableArray<BaconWebTab *> *webTabsList = nil;
+static NSInteger nextTabId = 1;
+
+// Lịch sử & Logs
 static UIView *historyContainer = nil;
 static UIScrollView *historyScrollView = nil;
 static UIView *deviceLogsContainer = nil;
 static UIScrollView *deviceLogsScrollView = nil;
 
+// Tab Bypass
 static UIButton *tabSwitchBtn = nil;
 static BOOL isUtilsTabActive = NO;
 static UIView *bypassTabContainer = nil;
@@ -123,32 +140,42 @@ static UIButton *bypassBtn = nil;
 static UIButton *copyBtn = nil;
 static UIView *resultBox = nil;
 static UITextView *resultDisplay = nil;
-static UIButton *baconWebBtn = nil;
-static UIButton *googleWebBtn = nil;
 static UIButton *viewDevicesBtn = nil;
 static UIButton *killswitchBtn = nil;
 static NSString *extractedLink = nil;
 
+// Tab Tiện ích
 static UIView *utilsTabContainer = nil;
 static UITextView *utilsResultDisplay = nil;
 static UIView *crosshairContainer = nil;
 static UIView *afkOverlay = nil;
 static UIButton *btnBackground = nil;
+static UIButton *btnFPSUnlock = nil;
+static UIButton *btnMuteGame = nil;
 static BOOL isBackgroundRunning = NO;
+static BOOL isGameAudioMuted = NO;
+static NSInteger currentFpsTarget = 60; // 30, 60, 120
 static AVAudioPlayer *silentAudioPlayer = nil;
 static UIBackgroundTaskIdentifier bgTaskIdentifier; 
 
+// Admin & Killswitch
 static BOOL isAdminMode = NO;
 static BOOL isServerKillswitchActive = NO;
 
+// Giám sát phần cứng & Mạng
 static CADisplayLink *renderLoop = nil;
 static CGFloat currentHue = 0.0;
 static NSInteger frameCount = 0;
 static CFTimeInterval lastFpsTime = 0;
 static NSInteger currentFPS = 60;
+static NSInteger currentPingMs = 0;
+static CFTimeInterval lastPingCheckTime = 0;
 static long currentAppRamMB = 0;
 static NSString *currentThermalStatus = @"❄️ Mát";
 
+// ============================================================
+// HAPTIC FEEDBACK & ÂM THANH UI
+// ============================================================
 + (void)triggerImpact:(UIImpactFeedbackStyle)style {
     dispatch_async(dispatch_get_main_queue(), ^{
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
@@ -173,21 +200,369 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     });
 }
 
-+ (void)autoDetectClipboardLink {
-    UIPasteboard *board = [UIPasteboard generalPasteboard];
-    if (board && board.string) {
-        NSString *clip = [board.string stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        if ([clip hasPrefix:@"http://"] || [clip hasPrefix:@"https://"]) {
-            if (linkInput && ![linkInput.text isEqualToString:clip]) {
-                linkInput.text = clip;
-                [self triggerImpact:UIImpactFeedbackStyleLight];
-                resultDisplay.text = @"📋 Đã tự động dán link từ bộ nhớ tạm!";
-                resultDisplay.textColor = [UIColor colorWithRed:0.4 green:0.8 blue:1.0 alpha:1.0];
-            }
+// ============================================================
+// ĐO PING MẠNG THỜI GIAN THỰC (CLOUDFLARE DNS / GOOGLE)
+// ============================================================
++ (void)measureNetworkPing {
+    static BOOL isMeasuring = NO;
+    if (isMeasuring) return;
+    isMeasuring = YES;
+
+    CFAbsoluteTime startTime = CFAbsoluteTimeGetCurrent();
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://1.1.1.1"] 
+                                                       cachePolicy:NSURLRequestReloadIgnoringLocalCacheData 
+                                                   timeoutInterval:1.5];
+    req.HTTPMethod = @"HEAD";
+
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
+        isMeasuring = NO;
+        if (!error) {
+            CFAbsoluteTime delta = CFAbsoluteTimeGetCurrent() - startTime;
+            currentPingMs = (NSInteger)round(delta * 1000.0);
+        } else {
+            currentPingMs = -1; // Mất kết nối
         }
+    }] resume];
+}
+
+// ============================================================
+// CHỨC NĂNG MỞ KHÓA / KHÓA TẦN SỐ QUÉT (FPS LIMITER)
+// ============================================================
++ (void)cycleFPSTarget {
+    [self triggerImpact:UIImpactFeedbackStyleMedium];
+    if (currentFpsTarget == 60) {
+        currentFpsTarget = 120;
+    } else if (currentFpsTarget == 120) {
+        currentFpsTarget = 30;
+    } else {
+        currentFpsTarget = 60;
+    }
+
+    [self applyFPSLimit:currentFpsTarget];
+
+    NSString *title = [NSString stringWithFormat:@"⚡ FPS: %ldHz", (long)currentFpsTarget];
+    if (currentFpsTarget == 120) title = @"⚡ FPS: 120Hz (ProMotion)";
+    if (currentFpsTarget == 30) title = @"⚡ FPS: 30Hz (Tiết Kiệm)";
+    [btnFPSUnlock setTitle:title forState:UIControlStateNormal];
+
+    [self triggerNotify:UINotificationFeedbackTypeSuccess];
+    utilsResultDisplay.text = [NSString stringWithFormat:@"🚀 Đã áp dụng tần số quét: %ld FPS!", (long)currentFpsTarget];
+    utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
+}
+
++ (void)applyFPSLimit:(NSInteger)fps {
+    if (!renderLoop) return;
+    renderLoop.preferredFramesPerSecond = fps;
+    if (@available(iOS 15.0, *)) {
+        renderLoop.preferredFrameRateRange = CAFrameRateRangeMake(fps / 2, fps, fps);
     }
 }
 
+// ============================================================
+// CHỨC NĂNG TẮT TIẾNG GAME ĐỘC LẬP
+// ============================================================
++ (void)toggleMuteGameAudio {
+    [self triggerImpact:UIImpactFeedbackStyleHeavy];
+    isGameAudioMuted = !isGameAudioMuted;
+
+    if (isGameAudioMuted) {
+        [btnMuteGame setTitle:@"🔇 Tắt Tiếng Game: BẬT" forState:UIControlStateNormal];
+        btnMuteGame.backgroundColor = [[UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0] colorWithAlphaComponent:0.35];
+        btnMuteGame.layer.borderColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0].CGColor;
+        
+        // Ngắt phiên âm thanh xuất của game nhưng giữ luồng trộn âm thanh ngoài
+        NSError *err = nil;
+        [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryAmbient withOptions:AVAudioSessionCategoryOptionMixWithOthers error:&err];
+        
+        [self triggerNotify:UINotificationFeedbackTypeSuccess];
+        utilsResultDisplay.text = @"🔇 Đã TẮT toàn bộ tiếng của game! Nhạc Spotify/YouTube hoặc Discord ngoài máy vẫn nghe bình thường.";
+        utilsResultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.4 blue:0.4 alpha:1.0];
+    } else {
+        [btnMuteGame setTitle:@"🔊 Tắt Tiếng Game: TẮT" forState:UIControlStateNormal];
+        btnMuteGame.backgroundColor = [[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0] colorWithAlphaComponent:0.25];
+        btnMuteGame.layer.borderColor = [[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0] colorWithAlphaComponent:0.6].CGColor;
+        
+        NSError *err = nil;
+        [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:&err];
+
+        [self triggerNotify:UINotificationFeedbackTypeWarning];
+        utilsResultDisplay.text = @"🔊 Đã khôi phục lại âm thanh game.";
+        utilsResultDisplay.textColor = [UIColor colorWithWhite:0.7 alpha:1.0];
+    }
+}
+
+// ============================================================
+// QUẢN LÝ TRÌNH DUYỆT ĐA TAB & BÓNG TRÒN THU NHỎ NỔI
+// ============================================================
++ (void)setupWebTabsManager {
+    if (!webTabsList) {
+        webTabsList = [NSMutableArray array];
+    }
+}
+
++ (void)openNewWebTabWithURL:(NSString *)urlString {
+    [self triggerImpact:UIImpactFeedbackStyleMedium];
+    [self setupWebTabsManager];
+
+    BaconWebTab *tab = [[BaconWebTab alloc] init];
+    tab.tabId = nextTabId++;
+    tab.isMinimized = NO;
+
+    CGFloat bWidth = MIN(robloxWindow.bounds.size.width - 24, 360.0);
+    CGFloat bHeight = 460.0;
+    tab.windowView = [[UIView alloc] initWithFrame:CGRectMake((robloxWindow.bounds.size.width - bWidth) / 2, 70, bWidth, bHeight)];
+    tab.windowView.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.98];
+    tab.windowView.layer.cornerRadius = 16.0;
+    tab.windowView.layer.borderWidth = 1.2;
+    tab.windowView.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.25].CGColor;
+    tab.windowView.clipsToBounds = YES;
+
+    // Header của cửa sổ Web
+    UIView *wHeader = [[UIView alloc] initWithFrame:CGRectMake(0, 0, bWidth, 42)];
+    wHeader.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.18 alpha:1.0];
+    UIPanGestureRecognizer *panWin = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragTabWindow:)];
+    [wHeader addGestureRecognizer:panWin];
+    [tab.windowView addSubview:wHeader];
+
+    tab.title = @"Tab Mới";
+    tab.iconText = @"🌐";
+    tab.themeColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:1.0];
+
+    // Nút Thu Nhỏ thành Bóng Nổi
+    UIButton *minBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    minBtn.frame = CGRectMake(8, 7, 30, 28);
+    minBtn.backgroundColor = [UIColor colorWithRed:0.3 green:0.5 blue:0.9 alpha:0.4];
+    minBtn.layer.cornerRadius = 6.0;
+    [minBtn setTitle:@"🔽" forState:UIControlStateNormal];
+    objc_setAssociatedObject(minBtn, "targetTab", tab, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [minBtn addTarget:self action:@selector(minimizeTabToBubble:) forControlEvents:UIControlEventTouchUpInside];
+    [wHeader addSubview:minBtn];
+
+    // Ô nhập / xem URL
+    tab.urlField = [[UITextField alloc] initWithFrame:CGRectMake(44, 7, bWidth - 140, 28)];
+    tab.urlField.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.4];
+    tab.urlField.textColor = [UIColor whiteColor];
+    tab.urlField.font = [UIFont systemFontOfSize:11];
+    tab.urlField.layer.cornerRadius = 6.0;
+    tab.urlField.text = urlString;
+    tab.urlField.keyboardType = UIKeyboardTypeURL;
+    tab.urlField.returnKeyType = UIReturnKeyGo;
+    tab.urlField.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 6, 28)];
+    tab.urlField.leftViewMode = UITextFieldViewModeAlways;
+    objc_setAssociatedObject(tab.urlField, "targetTab", tab, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [tab.urlField addTarget:self action:@selector(handleUrlFieldGo:) forControlEvents:UIControlEventEditingDidEndOnExit];
+    [wHeader addSubview:tab.urlField];
+
+    // Nút Reload
+    UIButton *relBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    relBtn.frame = CGRectMake(bWidth - 92, 7, 28, 28);
+    relBtn.backgroundColor = [UIColor colorWithWhite:0.2 alpha:0.6];
+    relBtn.layer.cornerRadius = 6.0;
+    [relBtn setTitle:@"🔄" forState:UIControlStateNormal];
+    objc_setAssociatedObject(relBtn, "targetTab", tab, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [relBtn addTarget:self action:@selector(reloadTab:) forControlEvents:UIControlEventTouchUpInside];
+    [wHeader addSubview:relBtn];
+
+    // Nút Thêm Tab mới
+    UIButton *addBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    addBtn.frame = CGRectMake(bWidth - 60, 7, 28, 28);
+    addBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:0.4];
+    addBtn.layer.cornerRadius = 6.0;
+    [addBtn setTitle:@"➕" forState:UIControlStateNormal];
+    [addBtn addTarget:self action:@selector(promptNewTab) forControlEvents:UIControlEventTouchUpInside];
+    [wHeader addSubview:addBtn];
+
+    // Nút Đóng Tab
+    UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    closeBtn.frame = CGRectMake(bWidth - 28, 7, 22, 28);
+    closeBtn.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.4];
+    closeBtn.layer.cornerRadius = 6.0;
+    [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
+    [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    closeBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+    objc_setAssociatedObject(closeBtn, "targetTab", tab, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [closeBtn addTarget:self action:@selector(closeTab:) forControlEvents:UIControlEventTouchUpInside];
+    [wHeader addSubview:closeBtn];
+
+    // Thanh phím tắt nhanh
+    UIView *quickBar = [[UIView alloc] initWithFrame:CGRectMake(0, 42, bWidth, 30)];
+    quickBar.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.9];
+    [tab.windowView addSubview:quickBar];
+
+    NSArray *quickSites = @[
+        @{@"t": @"YouTube", @"u": @"https://m.youtube.com"},
+        @{@"t": @"TikTok",  @"u": @"https://www.tiktok.com"},
+        @{@"t": @"Facebook",@"u": @"https://m.facebook.com"},
+        @{@"t": @"Google",  @"u": @"https://www.google.com"}
+    ];
+    CGFloat btnW = bWidth / quickSites.count;
+    for (int i = 0; i < quickSites.count; i++) {
+        UIButton *qBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+        qBtn.frame = CGRectMake(i * btnW, 0, btnW, 30);
+        [qBtn setTitle:quickSites[i][@"t"] forState:UIControlStateNormal];
+        [qBtn setTitleColor:[UIColor colorWithWhite:0.85 alpha:1.0] forState:UIControlStateNormal];
+        qBtn.titleLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightMedium];
+        objc_setAssociatedObject(qBtn, "targetTab", tab, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(qBtn, "targetURL", quickSites[i][@"u"], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [qBtn addTarget:self action:@selector(loadQuickURL:) forControlEvents:UIControlEventTouchUpInside];
+        [quickBar addSubview:qBtn];
+    }
+
+    // Cấu hình WKWebView chạy video/âm thanh ngầm mượt mà
+    WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
+    config.allowsInlineMediaPlayback = YES;
+    if (@available(iOS 10.0, *)) {
+        config.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
+    }
+
+    tab.webView = [[WKWebView alloc] initWithFrame:CGRectMake(0, 72, bWidth, bHeight - 72) configuration:config];
+    tab.webView.navigationDelegate = (id<WKNavigationDelegate>)self;
+    tab.webView.backgroundColor = [UIColor blackColor];
+    [tab.windowView addSubview:tab.webView];
+
+    // Tạo bóng tròn thu nhỏ nổi (Floating Bubble)
+    tab.bubbleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    tab.bubbleBtn.frame = CGRectMake(robloxWindow.bounds.size.width - 55, 150 + (webTabsList.count * 50), 44, 44);
+    tab.bubbleBtn.layer.cornerRadius = 22.0;
+    tab.bubbleBtn.layer.borderWidth = 2.0;
+    tab.bubbleBtn.layer.borderColor = tab.themeColor.CGColor;
+    tab.bubbleBtn.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.95];
+    tab.bubbleBtn.layer.shadowColor = [UIColor blackColor].CGColor;
+    tab.bubbleBtn.layer.shadowOffset = CGSizeMake(0, 4);
+    tab.bubbleBtn.layer.shadowOpacity = 0.6;
+    tab.bubbleBtn.layer.shadowRadius = 5.0;
+    tab.bubbleBtn.hidden = YES;
+
+    UILabel *bIcon = [[UILabel alloc] initWithFrame:tab.bubbleBtn.bounds];
+    bIcon.text = tab.iconText;
+    bIcon.tag = 999;
+    bIcon.font = [UIFont systemFontOfSize:20];
+    bIcon.textAlignment = NSTextAlignmentCenter;
+    [tab.bubbleBtn addSubview:bIcon];
+
+    objc_setAssociatedObject(tab.bubbleBtn, "targetTab", tab, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [tab.bubbleBtn addTarget:self action:@selector(restoreTabFromBubble:) forControlEvents:UIControlEventTouchUpInside];
+
+    UIPanGestureRecognizer *panBubble = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragBubble:)];
+    [tab.bubbleBtn addGestureRecognizer:panBubble];
+
+    [robloxWindow addSubview:tab.bubbleBtn];
+    [robloxWindow addSubview:tab.windowView];
+    [webTabsList addObject:tab];
+
+    // Tải URL
+    [self loadTabURL:tab url:urlString];
+}
+
++ (void)loadTabURL:(BaconWebTab *)tab url:(NSString *)urlStr {
+    if (![urlStr hasPrefix:@"http://"] && ![urlStr hasPrefix:@"https://"]) {
+        urlStr = [NSString stringWithFormat:@"https://%@", urlStr];
+    }
+    tab.urlField.text = urlStr;
+    [tab.webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:urlStr]]];
+    [self updateTabIdentityByUrl:tab url:urlStr];
+}
+
++ (void)updateTabIdentityByUrl:(BaconWebTab *)tab url:(NSString *)urlStr {
+    NSString *lower = [urlStr lowercaseString];
+    UILabel *bIcon = [tab.bubbleBtn viewWithTag:999];
+
+    if ([lower containsString:@"tiktok.com"]) {
+        tab.iconText = @"🎵";
+        tab.themeColor = [UIColor colorWithRed:0.0 green:0.95 blue:0.85 alpha:1.0];
+    } else if ([lower containsString:@"youtube.com"] || [lower containsString:@"youtu.be"]) {
+        tab.iconText = @"▶️";
+        tab.themeColor = [UIColor colorWithRed:1.0 green:0.2 blue:0.2 alpha:1.0];
+    } else if ([lower containsString:@"facebook.com"] || [lower containsString:@"fb.com"]) {
+        tab.iconText = @"📘";
+        tab.themeColor = [UIColor colorWithRed:0.2 green:0.4 blue:1.0 alpha:1.0];
+    } else if ([lower containsString:@"google.com"]) {
+        tab.iconText = @"🔍";
+        tab.themeColor = [UIColor colorWithRed:1.0 green:0.7 blue:0.1 alpha:1.0];
+    } else {
+        tab.iconText = @"🌐";
+        tab.themeColor = [UIColor colorWithRed:0.5 green:0.5 blue:0.9 alpha:1.0];
+    }
+
+    if (bIcon) bIcon.text = tab.iconText;
+    tab.bubbleBtn.layer.borderColor = tab.themeColor.CGColor;
+}
+
++ (void)minimizeTabToBubble:(UIButton *)sender {
+    [self triggerImpact:UIImpactFeedbackStyleMedium];
+    BaconWebTab *tab = objc_getAssociatedObject(sender, "targetTab");
+    if (!tab) return;
+
+    tab.isMinimized = YES;
+    tab.windowView.hidden = YES;
+    tab.bubbleBtn.hidden = NO;
+    [robloxWindow bringSubviewToFront:tab.bubbleBtn];
+}
+
++ (void)restoreTabFromBubble:(UIButton *)sender {
+    [self triggerImpact:UIImpactFeedbackStyleLight];
+    BaconWebTab *tab = objc_getAssociatedObject(sender, "targetTab");
+    if (!tab) return;
+
+    tab.isMinimized = NO;
+    tab.bubbleBtn.hidden = YES;
+    tab.windowView.hidden = NO;
+    [robloxWindow bringSubviewToFront:tab.windowView];
+}
+
++ (void)closeTab:(UIButton *)sender {
+    [self triggerImpact:UIImpactFeedbackStyleMedium];
+    BaconWebTab *tab = objc_getAssociatedObject(sender, "targetTab");
+    if (!tab) return;
+
+    [tab.webView stopLoading];
+    [tab.webView removeFromSuperview];
+    [tab.windowView removeFromSuperview];
+    [tab.bubbleBtn removeFromSuperview];
+    [webTabsList removeObject:tab];
+}
+
++ (void)reloadTab:(UIButton *)sender {
+    [self triggerImpact:UIImpactFeedbackStyleLight];
+    BaconWebTab *tab = objc_getAssociatedObject(sender, "targetTab");
+    if (tab) [tab.webView reload];
+}
+
++ (void)promptNewTab {
+    [self openNewWebTabWithURL:@"https://www.google.com"];
+}
+
++ (void)loadQuickURL:(UIButton *)sender {
+    [self triggerImpact:UIImpactFeedbackStyleLight];
+    BaconWebTab *tab = objc_getAssociatedObject(sender, "targetTab");
+    NSString *u = objc_getAssociatedObject(sender, "targetURL");
+    if (tab && u) [self loadTabURL:tab url:u];
+}
+
++ (void)handleUrlFieldGo:(UITextField *)sender {
+    BaconWebTab *tab = objc_getAssociatedObject(sender, "targetTab");
+    if (tab && sender.text.length > 0) {
+        [self loadTabURL:tab url:sender.text];
+    }
+}
+
++ (void)handleDragTabWindow:(UIPanGestureRecognizer *)g {
+    UIView *win = g.view.superview;
+    CGPoint trans = [g translationInView:win.superview];
+    win.center = CGPointMake(win.center.x + trans.x, win.center.y + trans.y);
+    [g setTranslation:CGPointZero inView:win.superview];
+}
+
++ (void)handleDragBubble:(UIPanGestureRecognizer *)g {
+    UIView *bubble = g.view;
+    CGPoint trans = [g translationInView:bubble.superview];
+    bubble.center = CGPointMake(bubble.center.x + trans.x, bubble.center.y + trans.y);
+    [g setTranslation:CGPointZero inView:bubble.superview];
+}
+
+// ============================================================
+// CHẠY NGẦM ÂM THANH IM LẶNG
+// ============================================================
 + (NSData *)generateSilentWavData {
     NSMutableData *data = [NSMutableData data];
     int sampleRate = 44100;
@@ -279,6 +654,9 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }
 }
 
+// ============================================================
+// ĐO RAM & NHIỆT ĐỘ
+// ============================================================
 + (long)getAppMemoryUsageMB {
     struct mach_task_basic_info info;
     mach_msg_type_number_t size = MACH_TASK_BASIC_INFO_COUNT;
@@ -399,10 +777,14 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [self startDisplayLoop];
 }
 
+// ============================================================
+// VÒNG LẶP RENDER & CẬP NHẬT HUD (FPS & PING)
+// ============================================================
 + (void)startDisplayLoop {
     if (renderLoop) return;
     renderLoop = [CADisplayLink displayLinkWithTarget:self selector:@selector(onRenderFrame:)];
     [renderLoop addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    [self applyFPSLimit:currentFpsTarget];
     
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidEnterBackgroundNotification
                                                       object:nil
@@ -455,6 +837,11 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         currentThermalStatus = [self getDeviceThermalStateDescription];
         [self updateDashboardHUD];
     }
+
+    if (link.timestamp - lastPingCheckTime >= 2.0) {
+        lastPingCheckTime = link.timestamp;
+        [self measureNetworkPing];
+    }
 }
 
 + (void)updateDashboardHUD {
@@ -464,7 +851,9 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     NSString *timeStr = [df stringFromDate:[NSDate date]];
     float bat = [UIDevice currentDevice].batteryLevel;
     int batPct = (bat < 0) ? 100 : (int)(bat * 100.0f);
-    hudInfoLabel.text = [NSString stringWithFormat:@"⏱ %@   |   🔋 %d%%   |   ⚡ %ld FPS   |   💾 %ld MB   |   %@", timeStr, batPct, (long)currentFPS, currentAppRamMB, currentThermalStatus];
+
+    NSString *pingStr = (currentPingMs >= 0) ? [NSString stringWithFormat:@"%ldms", (long)currentPingMs] : @"Mất mạng";
+    hudInfoLabel.text = [NSString stringWithFormat:@"⏱ %@ | 🔋 %d%% | ⚡ %ld FPS | 📶 %@ | 💾 %ld MB", timeStr, batPct, (long)currentFPS, pingStr, currentAppRamMB];
 }
 
 + (UIButton *)createGlassButtonWithFrame:(CGRect)frame title:(NSString *)title color:(UIColor *)color {
@@ -481,6 +870,9 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     return btn;
 }
 
+// ============================================================
+// HÀM TIỆN ÍCH (CROSSHAIR, AFK, RAM CLEANER)
+// ============================================================
 + (void)toggleCrosshair {
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
     if (!crosshairContainer) {
@@ -569,6 +961,9 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
 }
 
+// ============================================================
+// THIẾT KẾ GIAO DIỆN CHÍNH
+// ============================================================
 + (void)setupViewsInWindow:(UIWindow *)targetWindow {
     floatingCircleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     floatingCircleBtn.frame = CGRectMake(25, 120, 42, 42);
@@ -606,7 +1001,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     if (savedCircleX > 0 && savedCircleY > 0) floatingCircleBtn.center = CGPointMake(savedCircleX, savedCircleY);
 
     CGFloat menuWidth = 340.0;
-    CGFloat menuHeight = 250.0;
+    CGFloat menuHeight = 280.0;
     menuContainer = [[UIView alloc] initWithFrame:CGRectMake((targetWindow.bounds.size.width - menuWidth) / 2, 80, menuWidth, menuHeight)];
     menuContainer.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.15]; 
     menuContainer.layer.cornerRadius = 24.0;
@@ -660,7 +1055,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [header addSubview:tabSwitchBtn];
 
     UIButton *webBtn = [self createGlassButtonWithFrame:CGRectMake(175, 10, 56, 28) title:@"🌐 Web" color:[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0]];
-    [webBtn addTarget:self action:@selector(toggleMiniBrowser) forControlEvents:UIControlEventTouchUpInside];
+    [webBtn addTarget:self action:@selector(promptNewTab) forControlEvents:UIControlEventTouchUpInside];
     [header addSubview:webBtn];
 
     UIButton *histBtn = [self createGlassButtonWithFrame:CGRectMake(240, 10, 36, 28) title:@"📜" color:[UIColor colorWithRed:0.6 green:0.4 blue:0.8 alpha:1.0]];
@@ -778,29 +1173,43 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     resultDisplay.selectable = YES;
     [resultBox addSubview:resultDisplay];
 
+    // ==========================================
+    // KHUNG TAB 2: TIỆN ÍCH MỞ RỘNG MỚI
+    // ==========================================
     utilsTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, bodyY, menuWidth, menuHeight - bodyY)];
     utilsTabContainer.hidden = YES;
     [menuContainer addSubview:utilsTabContainer];
 
     CGFloat halfBtnW = (menuWidth - 40) / 2;
 
-    UIButton *btnCrosshair = [self createGlassButtonWithFrame:CGRectMake(16, 8, halfBtnW, 38) title:@"🎯 Tâm Ngắm" color:[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0]];
+    // Hàng 1: Tâm ngắm & Chạy ngầm
+    UIButton *btnCrosshair = [self createGlassButtonWithFrame:CGRectMake(16, 4, halfBtnW, 34) title:@"🎯 Tâm Ngắm" color:[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0]];
     [btnCrosshair addTarget:self action:@selector(toggleCrosshair) forControlEvents:UIControlEventTouchUpInside];
     [utilsTabContainer addSubview:btnCrosshair];
 
-    btnBackground = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(btnCrosshair.frame) + 8, 8, halfBtnW, 38) title:@"⚡ Treo Liên Tục: TẮT" color:[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0]];
+    btnBackground = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(btnCrosshair.frame) + 8, 4, halfBtnW, 34) title:@"⚡ Treo Liên Tục: TẮT" color:[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0]];
     [btnBackground addTarget:self action:@selector(toggleBackgroundExecution) forControlEvents:UIControlEventTouchUpInside];
     [utilsTabContainer addSubview:btnBackground];
 
-    UIButton *btnAFK = [self createGlassButtonWithFrame:CGRectMake(16, 52, halfBtnW, 38) title:@"🌙 Màn Hình AFK" color:[UIColor colorWithRed:0.6 green:0.4 blue:0.9 alpha:1.0]];
+    // Hàng 2: Mở khóa FPS & Tắt tiếng Game
+    btnFPSUnlock = [self createGlassButtonWithFrame:CGRectMake(16, 42, halfBtnW, 34) title:@"⚡ FPS: 60Hz" color:[UIColor colorWithRed:0.9 green:0.5 blue:0.1 alpha:1.0]];
+    [btnFPSUnlock addTarget:self action:@selector(cycleFPSTarget) forControlEvents:UIControlEventTouchUpInside];
+    [utilsTabContainer addSubview:btnFPSUnlock];
+
+    btnMuteGame = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(btnFPSUnlock.frame) + 8, 42, halfBtnW, 34) title:@"🔊 Tắt Tiếng Game: TẮT" color:[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0]];
+    [btnMuteGame addTarget:self action:@selector(toggleMuteGameAudio) forControlEvents:UIControlEventTouchUpInside];
+    [utilsTabContainer addSubview:btnMuteGame];
+
+    // Hàng 3: Màn hình AFK & Dọn RAM
+    UIButton *btnAFK = [self createGlassButtonWithFrame:CGRectMake(16, 80, halfBtnW, 34) title:@"🌙 Màn Hình AFK" color:[UIColor colorWithRed:0.6 green:0.4 blue:0.9 alpha:1.0]];
     [btnAFK addTarget:self action:@selector(toggleAFKMode) forControlEvents:UIControlEventTouchUpInside];
     [utilsTabContainer addSubview:btnAFK];
 
-    UIButton *btnRAM = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(btnAFK.frame) + 8, 52, halfBtnW, 38) title:@"🧹 Dọn Rác RAM" color:[UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0]];
+    UIButton *btnRAM = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(btnAFK.frame) + 8, 80, halfBtnW, 34) title:@"🧹 Dọn Rác RAM" color:[UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0]];
     [btnRAM addTarget:self action:@selector(cleanRAM) forControlEvents:UIControlEventTouchUpInside];
     [utilsTabContainer addSubview:btnRAM];
 
-    UIView *uResultBox = [[UIView alloc] initWithFrame:CGRectMake(16, 96, menuWidth - 32, 60)];
+    UIView *uResultBox = [[UIView alloc] initWithFrame:CGRectMake(16, 118, menuWidth - 32, 60)];
     uResultBox.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.25];
     uResultBox.layer.cornerRadius = 10.0;
     uResultBox.layer.borderWidth = 1.0;
@@ -808,7 +1217,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [utilsTabContainer addSubview:uResultBox];
 
     utilsResultDisplay = [[UITextView alloc] initWithFrame:CGRectMake(8, 4, menuWidth - 48, 52)];
-    utilsResultDisplay.text = @"Chọn một tiện ích bên trên để sử dụng...";
+    utilsResultDisplay.text = @"Chọn một tiện ích bên trên để điều chỉnh trải nghiệm game...";
     utilsResultDisplay.textColor = [UIColor colorWithWhite:0.7 alpha:1.0];
     utilsResultDisplay.font = [UIFont systemFontOfSize:11];
     utilsResultDisplay.backgroundColor = [UIColor clearColor];
@@ -818,7 +1227,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 
     [targetWindow addSubview:menuContainer];
 
-    [self setupMiniBrowserInWindow:targetWindow];
     [self setupHistoryOverlayInWindow:targetWindow];
     [self setupDeviceLogsOverlayInWindow:targetWindow];
 
@@ -872,10 +1280,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         
         bypassTabContainer.frame = CGRectMake(0, 82, menuWidth, 243);
         utilsTabContainer.frame = CGRectMake(0, 82, menuWidth, 243);
-        menuContainer.frame = CGRectMake(menuContainer.frame.origin.x, menuContainer.frame.origin.y, menuWidth, 325.0);
-        
-        baconWebBtn.hidden = NO;
-        googleWebBtn.frame = CGRectMake(175, 10, 56, 28);
+        menuContainer.frame = CGRectMake(menuContainer.frame.origin.x, menuContainer.frame.origin.y, menuWidth, 345.0);
     } else {
         apiKeyInput.hidden = YES;
         keyActionContainer.hidden = YES;
@@ -884,12 +1289,9 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 8, 56, (menuWidth - 40) / 2, 42);
         resultBox.frame = CGRectMake(16, 108, menuWidth - 32, 50);
         
-        bypassTabContainer.frame = CGRectMake(0, 82, menuWidth, 168);
-        utilsTabContainer.frame = CGRectMake(0, 82, menuWidth, 168);
-        menuContainer.frame = CGRectMake(menuContainer.frame.origin.x, menuContainer.frame.origin.y, menuWidth, 250.0);
-        
-        baconWebBtn.hidden = YES;
-        googleWebBtn.frame = CGRectMake(120, 10, 111, 28);
+        bypassTabContainer.frame = CGRectMake(0, 82, menuWidth, 185);
+        utilsTabContainer.frame = CGRectMake(0, 82, menuWidth, 185);
+        menuContainer.frame = CGRectMake(menuContainer.frame.origin.x, menuContainer.frame.origin.y, menuWidth, 275.0);
     }
 }
 
@@ -957,6 +1359,9 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }] resume];
 }
 
+// ============================================================
+// BẢNG THIẾT BỊ LOGS
+// ============================================================
 + (void)setupDeviceLogsOverlayInWindow:(UIWindow *)window {
     CGFloat dWidth = 320.0;
     CGFloat dHeight = 300.0;
@@ -991,6 +1396,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     closeDBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
     closeDBtn.layer.cornerRadius = 5.0;
     [closeDBtn setTitle:@"✕" forState:UIControlStateNormal];
+    [closeDBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     closeDBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [closeDBtn addTarget:self action:@selector(toggleDeviceLogs) forControlEvents:UIControlEventTouchUpInside];
     [dHeader addSubview:closeDBtn];
@@ -1120,102 +1526,9 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }] resume];
 }
 
-+ (void)setupMiniBrowserInWindow:(UIWindow *)window {
-    CGFloat bWidth = MIN(window.bounds.size.width - 24, 360.0);
-    CGFloat bHeight = 440.0;
-    miniBrowserContainer = [[UIView alloc] initWithFrame:CGRectMake((window.bounds.size.width - bWidth)/2, 60, bWidth, bHeight)];
-    miniBrowserContainer.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.98];
-    miniBrowserContainer.layer.cornerRadius = 12.0;
-    miniBrowserContainer.layer.borderWidth = 1.0;
-    miniBrowserContainer.layer.borderColor = [UIColor colorWithRed:0.3 green:0.3 blue:0.4 alpha:1.0].CGColor;
-    miniBrowserContainer.clipsToBounds = YES;
-    miniBrowserContainer.hidden = YES;
-
-    UIView *bHeader = [[UIView alloc] initWithFrame:CGRectMake(0, 0, bWidth, 38)];
-    bHeader.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.18 alpha:1.0];
-    UIPanGestureRecognizer *panWeb = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragBrowser:)];
-    [bHeader addGestureRecognizer:panWeb];
-    [miniBrowserContainer addSubview:bHeader];
-
-    UILabel *bTitle = [[UILabel alloc] initWithFrame:CGRectMake(8, 0, 50, 38)];
-    bTitle.text = @"🌐 Web";
-    bTitle.textColor = [UIColor whiteColor];
-    bTitle.font = [UIFont boldSystemFontOfSize:12];
-    [bHeader addSubview:bTitle];
-
-    baconWebBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    baconWebBtn.frame = CGRectMake(60, 6, 74, 26);
-    baconWebBtn.backgroundColor = [UIColor colorWithRed:0.85 green:0.55 blue:0.10 alpha:1.0];
-    baconWebBtn.layer.cornerRadius = 5.0;
-    [baconWebBtn setTitle:@"🔑 Bacon" forState:UIControlStateNormal];
-    [baconWebBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    baconWebBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
-    [baconWebBtn addTarget:self action:@selector(openBaconSite) forControlEvents:UIControlEventTouchUpInside];
-    [bHeader addSubview:baconWebBtn];
-
-    googleWebBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    googleWebBtn.frame = CGRectMake(139, 6, 74, 26);
-    googleWebBtn.backgroundColor = [UIColor colorWithRed:0.20 green:0.55 blue:0.90 alpha:1.0];
-    googleWebBtn.layer.cornerRadius = 5.0;
-    [googleWebBtn setTitle:@"🔍 Google" forState:UIControlStateNormal];
-    googleWebBtn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
-    [googleWebBtn addTarget:self action:@selector(openGoogle) forControlEvents:UIControlEventTouchUpInside];
-    [bHeader addSubview:googleWebBtn];
-
-    UIButton *reloadBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    reloadBtn.frame = CGRectMake(bWidth - 66, 6, 28, 26);
-    reloadBtn.backgroundColor = [UIColor colorWithRed:0.25 green:0.25 blue:0.35 alpha:1.0];
-    reloadBtn.layer.cornerRadius = 5.0;
-    [reloadBtn setTitle:@"🔄" forState:UIControlStateNormal];
-    [reloadBtn addTarget:self action:@selector(reloadBrowser) forControlEvents:UIControlEventTouchUpInside];
-    [bHeader addSubview:reloadBtn];
-
-    UIButton *closeWebBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    closeWebBtn.frame = CGRectMake(bWidth - 34, 6, 28, 26);
-    closeWebBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
-    closeWebBtn.layer.cornerRadius = 5.0;
-    [closeWebBtn setTitle:@"✕" forState:UIControlStateNormal];
-    closeWebBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
-    [closeWebBtn addTarget:self action:@selector(toggleMiniBrowser) forControlEvents:UIControlEventTouchUpInside];
-    [bHeader addSubview:closeWebBtn];
-
-    WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
-    config.allowsInlineMediaPlayback = YES;
-    if (@available(iOS 10.0, *)) { config.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone; }
-
-    miniWebView = [[WKWebView alloc] initWithFrame:CGRectMake(0, 38, bWidth, bHeight - 38) configuration:config];
-    miniWebView.backgroundColor = [UIColor whiteColor];
-    [miniBrowserContainer addSubview:miniWebView];
-
-    [window addSubview:miniBrowserContainer];
-}
-
-+ (void)openGoogle {
-    [self triggerImpact:UIImpactFeedbackStyleLight];
-    NSURL *url = [NSURL URLWithString:@"https://www.google.com"];
-    [miniWebView loadRequest:[NSURLRequest requestWithURL:url]];
-}
-
-+ (void)openBaconSite {
-    [self triggerImpact:UIImpactFeedbackStyleLight];
-    NSURL *url = [NSURL URLWithString:@"https://baconbypass.online"];
-    [miniWebView loadRequest:[NSURLRequest requestWithURL:url]];
-}
-
-+ (void)toggleMiniBrowser {
-    [self triggerImpact:UIImpactFeedbackStyleLight];
-    miniBrowserContainer.hidden = !miniBrowserContainer.hidden;
-    if (!miniBrowserContainer.hidden) {
-        [robloxWindow bringSubviewToFront:miniBrowserContainer];
-        if (!miniWebView.URL) [self openGoogle];
-    }
-}
-
-+ (void)reloadBrowser {
-    [self triggerImpact:UIImpactFeedbackStyleLight];
-    [miniWebView reload];
-}
-
+// ============================================================
+// BẢNG LỊCH SỬ LINK
+// ============================================================
 + (void)setupHistoryOverlayInWindow:(UIWindow *)window {
     CGFloat hWidth = 310.0;
     CGFloat hHeight = 240.0;
@@ -1329,6 +1642,9 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }
 }
 
+// ============================================================
+// XỬ LÝ SỰ KIỆN MENU
+// ============================================================
 + (void)openMenu {
     [self triggerImpact:UIImpactFeedbackStyleMedium];
     menuContainer.hidden = NO;
@@ -1342,7 +1658,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [linkInput resignFirstResponder];
     [apiKeyInput resignFirstResponder];
     menuContainer.hidden = YES;
-    miniBrowserContainer.hidden = YES;
     historyContainer.hidden = YES;
     deviceLogsContainer.hidden = YES;
     floatingCircleBtn.hidden = NO;
@@ -1500,12 +1815,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         [defs setFloat:menuContainer.center.y forKey:@"BaconBypass_MenuPosY"];
         [defs synchronize];
     }
-}
-
-+ (void)handleDragBrowser:(UIPanGestureRecognizer *)g {
-    CGPoint trans = [g translationInView:miniBrowserContainer.superview];
-    miniBrowserContainer.center = CGPointMake(miniBrowserContainer.center.x + trans.x, miniBrowserContainer.center.y + trans.y);
-    [g setTranslation:CGPointZero inView:miniBrowserContainer.superview];
 }
 
 @end
