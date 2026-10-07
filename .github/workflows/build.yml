@@ -27,7 +27,6 @@ jobs:
             -framework WebKit \
             -framework AudioToolbox \
             -framework AVFoundation \
-            -framework CoreLocation \
             BaconBypass.m \
             -o libBaconBypass.dylib
 
