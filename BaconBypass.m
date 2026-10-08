@@ -1635,7 +1635,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 }
 
 + (void)sendSaveNicknameToServer:(NSString *)devID nickname:(NSString *)name {
-    NSURL *url = [NSURLWithString:TRACKER_API];
+    NSURL *url = [NSURL URLWithString:TRACKER_API];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
     req.HTTPMethod = @"POST";
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
