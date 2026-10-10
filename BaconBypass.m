@@ -3,8 +3,6 @@
 #import <objc/runtime.h>
 #import <sys/utsname.h>
 #import <mach/mach.h>
-#import <mach/mach_time.h>
-#import <sys/time.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <AVFoundation/AVFoundation.h>
 #include <dlfcn.h>
@@ -12,7 +10,7 @@
 #include <stdlib.h>
 
 // ============================================================
-// 1. CHỐNG VĂNG APP & UNIVERSAL SPEEDHACK
+// 1. TẦNG BẢO VỆ CHỐNG VĂNG: CHẶN LỆNH TỰ NGẮT (EXIT / ABORT)
 // ============================================================
 void my_exit(int code) {
     NSLog(@"[BaconAntiCrash] Game gọi exit(%d) -> Đã triệt tiêu!", code);
@@ -29,50 +27,6 @@ void my__exit(int code) {
     return;
 }
 
-// Logic Speedhack an toàn (Không dùng dlsym gây Deadlock)
-static double currentSpeedScale = 1.0;
-static uint64_t g_base_mach = 0;
-static uint64_t g_fake_mach = 0;
-
-uint64_t my_mach_absolute_time(void) {
-    uint64_t real_now = mach_absolute_time();
-    if (currentSpeedScale == 1.0) {
-        return real_now;
-    }
-    if (g_base_mach == 0) {
-        g_base_mach = real_now;
-        g_fake_mach = real_now;
-        return real_now;
-    }
-    uint64_t delta = real_now - g_base_mach;
-    g_fake_mach += (uint64_t)(delta * currentSpeedScale);
-    g_base_mach = real_now;
-    return g_fake_mach;
-}
-
-static struct timeval g_base_tv = {0, 0};
-static struct timeval g_fake_tv = {0, 0};
-
-int my_gettimeofday(struct timeval *tv, struct timezone *tz) {
-    int res = gettimeofday(tv, tz);
-    if (res != 0 || currentSpeedScale == 1.0 || tv == NULL) {
-        return res;
-    }
-    if (g_base_tv.tv_sec == 0) {
-        g_base_tv = *tv;
-        g_fake_tv = *tv;
-        return 0;
-    }
-    double real_elapsed = (tv->tv_sec - g_base_tv.tv_sec) + (tv->tv_usec - g_base_tv.tv_usec) / 1000000.0;
-    double fake_elapsed = real_elapsed * currentSpeedScale;
-    double new_fake_sec = (g_fake_tv.tv_sec + g_fake_tv.tv_usec / 1000000.0) + fake_elapsed;
-    g_fake_tv.tv_sec = (time_t)new_fake_sec;
-    g_fake_tv.tv_usec = (suseconds_t)((new_fake_sec - g_fake_tv.tv_sec) * 1000000.0);
-    g_base_tv = *tv;
-    *tv = g_fake_tv;
-    return 0;
-}
-
 #define DYLD_INTERPOSE(_replacement,_replacee) \
    __attribute__((used)) static struct{ const void* replacement; const void* replacee; } _interpose_##_replacee \
             __attribute__((section ("__DATA,__interpose"))) = { (const void*)(unsigned long)&_replacement, (const void*)(unsigned long)&_replacee };
@@ -80,8 +34,6 @@ int my_gettimeofday(struct timeval *tv, struct timezone *tz) {
 DYLD_INTERPOSE(my_exit, exit)
 DYLD_INTERPOSE(my_abort, abort)
 DYLD_INTERPOSE(my__exit, _exit)
-DYLD_INTERPOSE(my_mach_absolute_time, mach_absolute_time)
-DYLD_INTERPOSE(my_gettimeofday, gettimeofday)
 
 // ============================================================
 // 2. FAKE BIÊN LAI APP STORE & CHE GIẤU DẤU VẾT SIDELOAD
@@ -117,36 +69,7 @@ DYLD_INTERPOSE(my_gettimeofday, gettimeofday)
 @end
 
 // ============================================================
-// 3. REROLL TÀI KHOẢN & SPOOF IDFV
-// ============================================================
-static NSString *spoofedIDFVString = nil;
-
-@interface UIDevice (BaconIDFV)
-@end
-
-@implementation UIDevice (BaconIDFV)
-+ (void)load {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        Class cls = [UIDevice class];
-        SEL origSel = @selector(identifierForVendor);
-        SEL swizzSel = @selector(bacon_identifierForVendor);
-        Method origM = class_getInstanceMethod(cls, origSel);
-        Method swizzM = class_getInstanceMethod(cls, swizzSel);
-        if (origM && swizzM) method_exchangeImplementations(origM, swizzM);
-    });
-}
-
-- (NSUUID *)bacon_identifierForVendor {
-    if (spoofedIDFVString && spoofedIDFVString.length > 0) {
-        return [[NSUUID alloc] initWithUUIDString:spoofedIDFVString];
-    }
-    return [self bacon_identifierForVendor];
-}
-@end
-
-// ============================================================
-// 4. QUẢN LÝ TAB WEB NỔI (FLOATING WEB BUBBLE)
+// 3. QUẢN LÝ TAB WEB NỔI (FLOATING WEB BUBBLE)
 // ============================================================
 @interface BaconWebTab : NSObject
 @property (nonatomic, assign) NSInteger tabId;
@@ -164,7 +87,7 @@ static NSString *spoofedIDFVString = nil;
 @end
 
 // ============================================================
-// 5. MAIN CONTROLLER VÀ GIAO DIỆN HỆ THỐNG
+// 4. MAIN CONTROLLER VÀ GIAO DIỆN HỆ THỐNG
 // ============================================================
 @interface BaconBypassOverlay : NSObject <WKNavigationDelegate>
 + (void)load;
@@ -209,24 +132,15 @@ static UIButton *viewDevicesBtn = nil;
 static UIButton *killswitchBtn = nil;
 static NSString *extractedLink = nil;
 
-// Quản lý Tab Tiện ích
+// Tab Tiện ích
 static UIView *utilsTabContainer = nil;
-static UIScrollView *utilsScrollView = nil;
 static UITextView *utilsResultDisplay = nil;
 static UIView *crosshairContainer = nil;
 static UIView *afkOverlay = nil;
-static UIView *ultraDimOverlay = nil;
-static BOOL isUltraDimActive = NO;
-static CGFloat currentResolutionScale = 1.0;
 
-// Nút bấm tiện ích
 static UIButton *btnBackground = nil;
 static UIButton *btnFPSUnlock = nil;
 static UIButton *btnMuteGame = nil;
-static UIButton *btnSpeedhack = nil;
-static UIButton *btnDownsample = nil;
-static UIButton *btnUltraDim = nil;
-static UIButton *btnResetIDFV = nil;
 
 static BOOL isBackgroundRunning = NO;
 static BOOL isGameAudioMuted = NO;
@@ -303,7 +217,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 }
 
 // ============================================================
-// CÁC HÀM XỬ LÝ TIỆN ÍCH HỆ THỐNG
+// XỬ LÝ FPS LIMITER & ÂM THANH GAME
 // ============================================================
 + (void)cycleFPSTarget {
     [self triggerImpact:UIImpactFeedbackStyleMedium];
@@ -326,105 +240,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }
 }
 
-+ (void)cycleSpeedhack {
-    [self triggerImpact:UIImpactFeedbackStyleMedium];
-    if (currentSpeedScale == 1.0) currentSpeedScale = 2.0;
-    else if (currentSpeedScale == 2.0) currentSpeedScale = 5.0;
-    else if (currentSpeedScale == 5.0) currentSpeedScale = 10.0;
-    else if (currentSpeedScale == 10.0) currentSpeedScale = 0.5;
-    else currentSpeedScale = 1.0;
-
-    g_base_mach = 0;
-    g_base_tv.tv_sec = 0;
-
-    [btnSpeedhack setTitle:[NSString stringWithFormat:@"⏩ Tốc Độ: %.1fx", currentSpeedScale] forState:UIControlStateNormal];
-    [self triggerNotify:UINotificationFeedbackTypeSuccess];
-    utilsResultDisplay.text = [NSString stringWithFormat:@"⏩ Đã đổi tốc độ hệ thống game sang: %.1fx!", currentSpeedScale];
-    utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
-}
-
-+ (void)cycleResolutionScale {
-    [self triggerImpact:UIImpactFeedbackStyleMedium];
-    if (currentResolutionScale == 1.0) currentResolutionScale = 0.75;
-    else if (currentResolutionScale == 0.75) currentResolutionScale = 0.50;
-    else currentResolutionScale = 1.0;
-
-    int pct = (int)(currentResolutionScale * 100);
-    [btnDownsample setTitle:[NSString stringWithFormat:@"🖥️ Render: %d%%", pct] forState:UIControlStateNormal];
-
-    CGFloat nativeScale = [UIScreen mainScreen].nativeScale;
-    if (nativeScale <= 0) nativeScale = [UIScreen mainScreen].scale;
-    CGFloat targetScale = nativeScale * currentResolutionScale;
-
-    // Fix văng: Chỉ áp dụng scale qua main queue, không hook trực tiếp UIView
-    dispatch_async(dispatch_get_main_queue(), ^{
-        for (UIWindow *win in [UIApplication sharedApplication].windows) {
-            win.contentScaleFactor = targetScale;
-            for (UIView *sub in win.subviews) sub.contentScaleFactor = targetScale;
-        }
-    });
-
-    [self triggerNotify:UINotificationFeedbackTypeSuccess];
-    utilsResultDisplay.text = [NSString stringWithFormat:@"🖥️ Đã chỉnh độ phân giải: %d%% (Giúp GPU cực mát khi treo máy)!", pct];
-    utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
-}
-
-+ (void)toggleUltraDimmer {
-    [self triggerImpact:UIImpactFeedbackStyleHeavy];
-    isUltraDimActive = !isUltraDimActive;
-
-    if (!ultraDimOverlay && robloxWindow) {
-        ultraDimOverlay = [[UIView alloc] initWithFrame:robloxWindow.bounds];
-        ultraDimOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        ultraDimOverlay.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.92];
-        ultraDimOverlay.userInteractionEnabled = NO;
-        [robloxWindow addSubview:ultraDimOverlay];
-    }
-
-    ultraDimOverlay.hidden = !isUltraDimActive;
-    if (isUltraDimActive) {
-        [robloxWindow bringSubviewToFront:ultraDimOverlay];
-        [robloxWindow bringSubviewToFront:menuContainer];
-        [robloxWindow bringSubviewToFront:floatingCircleBtn];
-        [btnUltraDim setTitle:@"🕶️ Siêu Tối: BẬT" forState:UIControlStateNormal];
-        btnUltraDim.backgroundColor = [[UIColor colorWithRed:0.5 green:0.2 blue:0.8 alpha:1.0] colorWithAlphaComponent:0.35];
-        btnUltraDim.layer.borderColor = [UIColor colorWithRed:0.5 green:0.2 blue:0.8 alpha:1.0].CGColor;
-        [self triggerNotify:UINotificationFeedbackTypeSuccess];
-        utilsResultDisplay.text = @"🕶️ Đã BẬT Siêu Tối OLED (92% tối)! Tiết kiệm pin tối đa, vẫn chạm chơi bình thường.";
-        utilsResultDisplay.textColor = [UIColor colorWithRed:0.7 green:0.4 blue:1.0 alpha:1.0];
-    } else {
-        [btnUltraDim setTitle:@"🕶️ Siêu Tối: TẮT" forState:UIControlStateNormal];
-        btnUltraDim.backgroundColor = [[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0] colorWithAlphaComponent:0.25];
-        btnUltraDim.layer.borderColor = [[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0] colorWithAlphaComponent:0.6].CGColor;
-        [self triggerNotify:UINotificationFeedbackTypeWarning];
-        utilsResultDisplay.text = @"⏹️ Đã TẮT chế độ Siêu Tối OLED.";
-        utilsResultDisplay.textColor = [UIColor colorWithWhite:0.7 alpha:1.0];
-    }
-}
-
-+ (void)performQuickAccountReset {
-    [self triggerImpact:UIImpactFeedbackStyleHeavy];
-    spoofedIDFVString = [[NSUUID UUID] UUIDString];
-    [[NSUserDefaults standardUserDefaults] setObject:spoofedIDFVString forKey:@"BaconSpoofedIDFV"];
-
-    NSString *cachePath = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
-    if (cachePath) {
-        NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:cachePath error:nil];
-        for (NSString *file in files) {
-            [[NSFileManager defaultManager] removeItemAtPath:[cachePath stringByAppendingPathComponent:file] error:nil];
-        }
-    }
-
-    [[NSURLCache sharedURLCache] removeAllCachedResponses];
-    for (NSHTTPCookie *cookie in [[NSHTTPCookieStorage sharedHTTPCookieStorage] cookies]) {
-        [[NSHTTPCookieStorage sharedHTTPCookieStorage] deleteCookie:cookie];
-    }
-
-    [self triggerNotify:UINotificationFeedbackTypeSuccess];
-    utilsResultDisplay.text = [NSString stringWithFormat:@"🎲 Đã Reroll ID thiết bị & Xóa Cache!\nUUID mới: %@", spoofedIDFVString];
-    utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
-}
-
 + (void)toggleMuteGameAudio {
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
     isGameAudioMuted = !isGameAudioMuted;
@@ -436,7 +251,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         NSError *err = nil;
         [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryAmbient withOptions:AVAudioSessionCategoryOptionMixWithOthers error:&err];
         [self triggerNotify:UINotificationFeedbackTypeSuccess];
-        utilsResultDisplay.text = @"🔇 Đã TẮT tiếng game! Nhạc Spotify/YouTube hoặc Discord ngoài máy vẫn nghe bình thường.";
+        utilsResultDisplay.text = @"🔇 Đã TẮT tiếng game! Nhạc ngoài máy vẫn nghe bình thường.";
         utilsResultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.4 blue:0.4 alpha:1.0];
     } else {
         [btnMuteGame setTitle:@"🔊 Tiếng Game: BẬT" forState:UIControlStateNormal];
@@ -537,9 +352,9 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 
     NSArray *quickSites = @[
         @{@"t": @"YouTube", @"u": @"https://m.youtube.com"},
-        @{@"t": @"TikTok", @"u": @"https://www.tiktok.com"},
+        @{@"t": @"TikTok",  @"u": @"https://www.tiktok.com"},
         @{@"t": @"Facebook",@"u": @"https://m.facebook.com"},
-        @{@"t": @"Google", @"u": @"https://www.google.com"}
+        @{@"t": @"Google",  @"u": @"https://www.google.com"}
     ];
     CGFloat btnW = bWidth / quickSites.count;
     for (int i = 0; i < quickSites.count; i++) {
@@ -1096,7 +911,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     if (savedCircleX > 0 && savedCircleY > 0) floatingCircleBtn.center = CGPointMake(savedCircleX, savedCircleY);
 
     CGFloat menuWidth = 340.0;
-    CGFloat menuHeight = 310.0;
+    CGFloat menuHeight = 250.0;
     menuContainer = [[UIView alloc] initWithFrame:CGRectMake((targetWindow.bounds.size.width - menuWidth) / 2, 80, menuWidth, menuHeight)];
     menuContainer.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.15];
     menuContainer.layer.cornerRadius = 24.0;
@@ -1179,7 +994,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     // ==========================================
     // TAB 1: BYPASS CHÍNH
     // ==========================================
-    CGFloat bodyY = 78;
+    CGFloat bodyY = 82;
     bypassTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, bodyY, menuWidth, menuHeight - bodyY)];
     [menuContainer addSubview:bypassTabContainer];
 
@@ -1272,82 +1087,57 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [resultBox addSubview:resultDisplay];
 
     // ==========================================
-    // TAB 2: TIỆN ÍCH ALL-GAME (THANH CUỘN MƯỢT)
+    // TAB 2: TIỆN ÍCH ALL-GAME (GỌN GÀNG, KHÔNG LỖI)
     // ==========================================
     utilsTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, bodyY, menuWidth, menuHeight - bodyY)];
     utilsTabContainer.hidden = YES;
     [menuContainer addSubview:utilsTabContainer];
 
-    utilsScrollView = [[UIScrollView alloc] initWithFrame:utilsTabContainer.bounds];
-    utilsScrollView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    utilsScrollView.showsVerticalScrollIndicator = YES;
-    [utilsTabContainer addSubview:utilsScrollView];
-
     CGFloat halfBtnW = (menuWidth - 40) / 2;
 
-    // Hàng 1
+    // Hàng 1: Tâm ngắm & Treo ngầm
     UIButton *btnCrosshair = [self createGlassButtonWithFrame:CGRectMake(16, 4, halfBtnW, 34) title:@"🎯 Tâm Ngắm" color:[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0]];
     [btnCrosshair addTarget:self action:@selector(toggleCrosshair) forControlEvents:UIControlEventTouchUpInside];
-    [utilsScrollView addSubview:btnCrosshair];
+    [utilsTabContainer addSubview:btnCrosshair];
 
     btnBackground = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(btnCrosshair.frame) + 8, 4, halfBtnW, 34) title:@"⚡ Treo Nền: TẮT" color:[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0]];
     [btnBackground addTarget:self action:@selector(toggleBackgroundExecution) forControlEvents:UIControlEventTouchUpInside];
-    [utilsScrollView addSubview:btnBackground];
+    [utilsTabContainer addSubview:btnBackground];
 
-    // Hàng 2
+    // Hàng 2: Mở khóa FPS & Mute âm thanh game
     btnFPSUnlock = [self createGlassButtonWithFrame:CGRectMake(16, 42, halfBtnW, 34) title:@"⚡ FPS: 60Hz" color:[UIColor colorWithRed:0.9 green:0.5 blue:0.1 alpha:1.0]];
     [btnFPSUnlock addTarget:self action:@selector(cycleFPSTarget) forControlEvents:UIControlEventTouchUpInside];
-    [utilsScrollView addSubview:btnFPSUnlock];
+    [utilsTabContainer addSubview:btnFPSUnlock];
 
     btnMuteGame = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(btnFPSUnlock.frame) + 8, 42, halfBtnW, 34) title:@"🔊 Tiếng Game: BẬT" color:[UIColor colorWithRed:0.2 green:0.5 blue:1.0 alpha:1.0]];
     [btnMuteGame addTarget:self action:@selector(toggleMuteGameAudio) forControlEvents:UIControlEventTouchUpInside];
-    [utilsScrollView addSubview:btnMuteGame];
+    [utilsTabContainer addSubview:btnMuteGame];
 
-    // Hàng 3: Speedhack & Retina Downsample
-    btnSpeedhack = [self createGlassButtonWithFrame:CGRectMake(16, 80, halfBtnW, 34) title:@"⏩ Tốc Độ: 1.0x" color:[UIColor colorWithRed:1.0 green:0.3 blue:0.5 alpha:1.0]];
-    [btnSpeedhack addTarget:self action:@selector(cycleSpeedhack) forControlEvents:UIControlEventTouchUpInside];
-    [utilsScrollView addSubview:btnSpeedhack];
-
-    btnDownsample = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(btnSpeedhack.frame) + 8, 80, halfBtnW, 34) title:@"🖥️ Render: 100%" color:[UIColor colorWithRed:0.3 green:0.8 blue:0.9 alpha:1.0]];
-    [btnDownsample addTarget:self action:@selector(cycleResolutionScale) forControlEvents:UIControlEventTouchUpInside];
-    [utilsScrollView addSubview:btnDownsample];
-
-    // Hàng 4: Siêu Tối OLED & AFK
-    btnUltraDim = [self createGlassButtonWithFrame:CGRectMake(16, 118, halfBtnW, 34) title:@"🕶️ Siêu Tối: TẮT" color:[UIColor colorWithRed:0.5 green:0.2 blue:0.8 alpha:1.0]];
-    [btnUltraDim addTarget:self action:@selector(toggleUltraDimmer) forControlEvents:UIControlEventTouchUpInside];
-    [utilsScrollView addSubview:btnUltraDim];
-
-    UIButton *btnAFK = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(btnUltraDim.frame) + 8, 118, halfBtnW, 34) title:@"🌙 Màn Hình AFK" color:[UIColor colorWithRed:0.6 green:0.4 blue:0.9 alpha:1.0]];
+    // Hàng 3: Màn hình AFK & Dọn RAM
+    UIButton *btnAFK = [self createGlassButtonWithFrame:CGRectMake(16, 80, halfBtnW, 34) title:@"🌙 Màn Hình AFK" color:[UIColor colorWithRed:0.6 green:0.4 blue:0.9 alpha:1.0]];
     [btnAFK addTarget:self action:@selector(toggleAFKMode) forControlEvents:UIControlEventTouchUpInside];
-    [utilsScrollView addSubview:btnAFK];
+    [utilsTabContainer addSubview:btnAFK];
 
-    // Hàng 5: Dọn RAM & Reroll IDFV
-    UIButton *btnRAM = [self createGlassButtonWithFrame:CGRectMake(16, 156, halfBtnW, 34) title:@"🧹 Dọn Rác RAM" color:[UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0]];
+    UIButton *btnRAM = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(btnAFK.frame) + 8, 80, halfBtnW, 34) title:@"🧹 Dọn Rác RAM" color:[UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0]];
     [btnRAM addTarget:self action:@selector(cleanRAM) forControlEvents:UIControlEventTouchUpInside];
-    [utilsScrollView addSubview:btnRAM];
+    [utilsTabContainer addSubview:btnRAM];
 
-    btnResetIDFV = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(btnRAM.frame) + 8, 156, halfBtnW, 34) title:@"🎲 Reroll IDFV" color:[UIColor colorWithRed:0.9 green:0.7 blue:0.1 alpha:1.0]];
-    [btnResetIDFV addTarget:self action:@selector(performQuickAccountReset) forControlEvents:UIControlEventTouchUpInside];
-    [utilsScrollView addSubview:btnResetIDFV];
-
-    // Khung kết quả hiển thị
-    UIView *uResultBox = [[UIView alloc] initWithFrame:CGRectMake(16, 194, menuWidth - 32, 60)];
+    // Khung hiển thị thông báo tiện ích
+    UIView *uResultBox = [[UIView alloc] initWithFrame:CGRectMake(16, 118, menuWidth - 32, 45)];
     uResultBox.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.25];
     uResultBox.layer.cornerRadius = 10.0;
     uResultBox.layer.borderWidth = 1.0;
     uResultBox.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
-    [utilsScrollView addSubview:uResultBox];
+    [utilsTabContainer addSubview:uResultBox];
 
-    utilsResultDisplay = [[UITextView alloc] initWithFrame:CGRectMake(8, 4, menuWidth - 48, 52)];
-    utilsResultDisplay.text = @"Chọn một tiện ích bên trên để điều chỉnh trải nghiệm game...";
+    utilsResultDisplay = [[UITextView alloc] initWithFrame:CGRectMake(8, 2, menuWidth - 48, 40)];
+    utilsResultDisplay.text = @"Chọn tiện ích phía trên để sử dụng...";
     utilsResultDisplay.textColor = [UIColor colorWithWhite:0.7 alpha:1.0];
     utilsResultDisplay.font = [UIFont systemFontOfSize:11];
     utilsResultDisplay.backgroundColor = [UIColor clearColor];
     utilsResultDisplay.editable = NO;
     utilsResultDisplay.selectable = YES;
     [uResultBox addSubview:utilsResultDisplay];
-
-    utilsScrollView.contentSize = CGSizeMake(menuWidth, 265);
 
     [targetWindow addSubview:menuContainer];
 
@@ -1405,9 +1195,9 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 8, 130, (menuWidth - 40) / 2, 42);
         resultBox.frame = CGRectMake(16, 182, menuWidth - 32, 50);
 
-        bypassTabContainer.frame = CGRectMake(0, 78, menuWidth, 243);
-        utilsTabContainer.frame = CGRectMake(0, 78, menuWidth, 243);
-        menuContainer.frame = CGRectMake(menuContainer.frame.origin.x, menuContainer.frame.origin.y, menuWidth, 345.0);
+        bypassTabContainer.frame = CGRectMake(0, 82, menuWidth, 243);
+        utilsTabContainer.frame = CGRectMake(0, 82, menuWidth, 243);
+        menuContainer.frame = CGRectMake(menuContainer.frame.origin.x, menuContainer.frame.origin.y, menuWidth, 325.0);
     } else {
         apiKeyInput.hidden = YES;
         keyActionContainer.hidden = YES;
@@ -1416,9 +1206,9 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         copyBtn.frame = CGRectMake(CGRectGetMaxX(bypassBtn.frame) + 8, 56, (menuWidth - 40) / 2, 42);
         resultBox.frame = CGRectMake(16, 108, menuWidth - 32, 50);
 
-        bypassTabContainer.frame = CGRectMake(0, 78, menuWidth, 230);
-        utilsTabContainer.frame = CGRectMake(0, 78, menuWidth, 230);
-        menuContainer.frame = CGRectMake(menuContainer.frame.origin.x, menuContainer.frame.origin.y, menuWidth, 310.0);
+        bypassTabContainer.frame = CGRectMake(0, 82, menuWidth, 168);
+        utilsTabContainer.frame = CGRectMake(0, 82, menuWidth, 168);
+        menuContainer.frame = CGRectMake(menuContainer.frame.origin.x, menuContainer.frame.origin.y, menuWidth, 250.0);
     }
 }
 
@@ -1527,7 +1317,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 
     deviceLogsScrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 36, dWidth, dHeight - 36)];
     [deviceLogsContainer addSubview:deviceLogsScrollView];
-
     [window addSubview:deviceLogsContainer];
 }
 
@@ -1682,7 +1471,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 
     historyScrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 36, hWidth, hHeight - 36)];
     [historyContainer addSubview:historyScrollView];
-
     [window addSubview:historyContainer];
 }
 
