@@ -10,20 +10,24 @@
 #include <stdlib.h>
 
 // ============================================================
-// 1. CỬA SỔ OVERLAY ĐỘC LẬP (ĐỒNG BỘ CHẶT CHẼ HƯỚNG XOAY NGANG)
+// 1. CỬA SỔ OVERLAY ĐỘC LẬP (CẤP KEYWINDOW ĐỘNG ĐỂ HIỆN BÀN PHÍM)
 // ============================================================
+static BOOL g_overlayCanBeKey = NO;
+
 @interface BaconPassthroughWindow : UIWindow
 @end
 
 @implementation BaconPassthroughWindow
 - (BOOL)canBecomeKeyWindow {
-    return NO; // Tuyệt đối không cướp keyWindow của Roblox/Delta để tránh văng khi đổi server
+    // Chỉ nhận keyWindow khi mở menu hoặc nhập mã PIN để hiển thị bàn phím ảo.
+    // Lúc chơi game hoặc đổi server, tự động trả keyWindow về cho Roblox để chống văng.
+    return g_overlayCanBeKey;
 }
 
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hitView = [super hitTest:point withEvent:event];
     if (hitView == self || hitView == self.rootViewController.view) {
-        return nil; // Cho phép tương tác chạm xuyên xuống game mượt mà
+        return nil; // Chạm xuyên thấu xuống màn hình game khi bấm ra ngoài menu
     }
     return hitView;
 }
@@ -41,19 +45,16 @@ static UIView *crosshairContainer = nil;
     return YES;
 }
 
-// Khóa chặt chẽ chỉ cho phép xoay ngang đồng bộ với Info.plist, xóa sổ hoàn toàn lỗi mở màn dọc
+// Cho phép cả dọc (ở sảnh) và ngang (khi vào phòng chơi)
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return UIInterfaceOrientationMaskLandscape;
-}
-
-- (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
-    return UIInterfaceOrientationLandscapeRight;
+    return UIInterfaceOrientationMaskAllButUpsideDown;
 }
 
 - (BOOL)prefersStatusBarHidden {
     return YES;
 }
 
+// Tự động căn lại vị trí tâm ngắm và menu khi màn hình chuyển đổi giữa dọc và ngang
 - (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
     [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
     [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
@@ -155,6 +156,32 @@ static NSInteger currentPingMs = 0;
 static CFTimeInterval lastPingCheckTime = 0;
 static long currentAppRamMB = 0;
 
++ (void)activateOverlayKeyWindow {
+    g_overlayCanBeKey = YES;
+    [baconOverlayWindow makeKeyWindow];
+}
+
++ (void)restoreGameKeyWindow {
+    g_overlayCanBeKey = NO;
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if ([scene isKindOfClass:[UIWindowScene class]]) {
+            UIWindowScene *ws = (UIWindowScene *)scene;
+            for (UIWindow *w in ws.windows) {
+                if (w != baconOverlayWindow && !w.hidden && w.rootViewController) {
+                    [w makeKeyWindow];
+                    return;
+                }
+            }
+        }
+    }
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        if (w != baconOverlayWindow && !w.hidden && w.rootViewController) {
+            [w makeKeyWindow];
+            return;
+        }
+    }
+}
+
 + (void)triggerImpact:(UIImpactFeedbackStyle)style {
     dispatch_async(dispatch_get_main_queue(), ^{
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
@@ -190,7 +217,6 @@ static long currentAppRamMB = 0;
     }
 }
 
-// Đo Ping độc lập qua cấu hình riêng, không can thiệp sharedSession của Delta
 + (void)measureNetworkPing {
     static BOOL isMeasuring = NO;
     if (isMeasuring) return;
@@ -759,7 +785,6 @@ static long currentAppRamMB = 0;
         [self updateDashboardHUD];
     }
 
-    // CHỈ đo ping khi MENU ĐANG MỞ, hoàn toàn ngắt mạng khi menu đóng để bảo vệ socket lúc đổi server
     if (menuContainer && !menuContainer.hidden) {
         if (link.timestamp - lastPingCheckTime >= 5.0) {
             lastPingCheckTime = link.timestamp;
@@ -1213,6 +1238,10 @@ static long currentAppRamMB = 0;
 
 + (void)handleAdminSecretTap {
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
+    
+    // Kích hoạt quyền keyWindow để bàn phím ảo hiển thị
+    [self activateOverlayKeyWindow];
+
     UIViewController *topVC = baconOverlayWindow.rootViewController;
     while (topVC.presentedViewController) topVC = topVC.presentedViewController;
     if (!topVC) return;
@@ -1226,14 +1255,21 @@ static long currentAppRamMB = 0;
             [self triggerNotify:UINotificationFeedbackTypeSuccess];
             resultDisplay.text = @"🔒 Đã khóa chế độ Admin! Chuyển về giao diện Khách.";
             resultDisplay.textColor = [UIColor colorWithWhite:0.8 alpha:1.0];
+            if (menuContainer.hidden) [self restoreGameKeyWindow];
         }]];
-        [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
+            if (menuContainer.hidden) [self restoreGameKeyWindow];
+        }]];
         [topVC presentViewController:alert animated:YES completion:nil];
         return;
     }
 
     UIAlertController *pinAlert = [UIAlertController alertControllerWithTitle:@"🔐 Quyền Admin" message:@"Nhập mật mã để mở bảng quản trị:" preferredStyle:UIAlertControllerStyleAlert];
-    [pinAlert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) { textField.placeholder = @"Nhập mật mã..."; textField.secureTextEntry = YES; textField.keyboardType = UIKeyboardTypeNumberPad; }];
+    [pinAlert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
+        textField.placeholder = @"Nhập mật mã...";
+        textField.secureTextEntry = YES;
+        textField.keyboardType = UIKeyboardTypeNumberPad;
+    }];
 
     [pinAlert addAction:[UIAlertAction actionWithTitle:@"Mở khóa" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         NSString *enteredPIN = pinAlert.textFields.firstObject.text;
@@ -1248,9 +1284,15 @@ static long currentAppRamMB = 0;
             resultDisplay.text = @"❌ Mật mã không đúng!";
             resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
         }
+        if (menuContainer.hidden) [self restoreGameKeyWindow];
     }]];
-    [pinAlert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
-    [topVC presentViewController:pinAlert animated:YES completion:nil];
+    [pinAlert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
+        if (menuContainer.hidden) [self restoreGameKeyWindow];
+    }]];
+
+    [topVC presentViewController:pinAlert animated:YES completion:^{
+        [pinAlert.textFields.firstObject becomeFirstResponder];
+    }];
 }
 
 + (void)handleToggleKillswitchRemote {
@@ -1413,6 +1455,8 @@ static long currentAppRamMB = 0;
 
 + (void)promptEditNickname:(UIButton *)sender {
     [self triggerImpact:UIImpactFeedbackStyleLight];
+    [self activateOverlayKeyWindow];
+
     NSString *devID = objc_getAssociatedObject(sender, "targetDevID");
     if (!devID) return;
 
@@ -1421,14 +1465,22 @@ static long currentAppRamMB = 0;
     if (!topVC) return;
 
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"🏷️ Đặt Biệt Danh Thiết Bị" message:[NSString stringWithFormat:@"Nhập tên cho máy (ID: %@):", devID] preferredStyle:UIAlertControllerStyleAlert];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) { textField.placeholder = @"Ví dụ: Máy phụ của Đạt..."; }];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
+        textField.placeholder = @"Ví dụ: Máy phụ của Đạt...";
+    }];
 
     [alert addAction:[UIAlertAction actionWithTitle:@"Lưu" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         NSString *name = alert.textFields.firstObject.text;
         [self sendSaveNicknameToServer:devID nickname:name];
+        if (menuContainer.hidden) [self restoreGameKeyWindow];
     }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
-    [topVC presentViewController:alert animated:YES completion:nil];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
+        if (menuContainer.hidden) [self restoreGameKeyWindow];
+    }]];
+
+    [topVC presentViewController:alert animated:YES completion:^{
+        [alert.textFields.firstObject becomeFirstResponder];
+    }];
 }
 
 + (void)sendSaveNicknameToServer:(NSString *)devID nickname:(NSString *)name {
@@ -1566,6 +1618,7 @@ static long currentAppRamMB = 0;
 
 + (void)openMenu {
     [self triggerImpact:UIImpactFeedbackStyleMedium];
+    [self activateOverlayKeyWindow]; // Cho phép bàn phím xuất hiện khi bấm vào textfield
     menuContainer.hidden = NO;
     floatingCircleBtn.hidden = YES;
     [baconOverlayWindow.rootViewController.view bringSubviewToFront:menuContainer];
@@ -1576,6 +1629,7 @@ static long currentAppRamMB = 0;
     [self triggerImpact:UIImpactFeedbackStyleLight];
     [linkInput resignFirstResponder];
     [apiKeyInput resignFirstResponder];
+    [self restoreGameKeyWindow]; // Trả lại quyền cho Roblox để đổi server không bị văng
     menuContainer.hidden = YES;
     historyContainer.hidden = YES;
     deviceLogsContainer.hidden = YES;
