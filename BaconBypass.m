@@ -10,70 +10,40 @@
 #include <stdlib.h>
 
 // ============================================================
-// 1. CỬA SỔ OVERLAY ĐỘC LẬP & TỰ ĐỒNG BỘ XOAY NGANG VỚI GAME
+// 1. CỬA SỔ OVERLAY ĐỘC LẬP (KHÔNG CƯỚP KEYWINDOW CỦA GAME)
 // ============================================================
 @interface BaconPassthroughWindow : UIWindow
 @end
 
 @implementation BaconPassthroughWindow
+- (BOOL)canBecomeKeyWindow {
+    return NO; // Giữ nguyên keyWindow cho game, tránh crash khi đổi server
+}
+
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hitView = [super hitTest:point withEvent:event];
     if (hitView == self || hitView == self.rootViewController.view) {
-        return nil; // Chạm xuyên thấu xuống màn hình game khi không bấm vào menu
+        return nil; // Chạm xuyên thấu xuống game khi bấm ra ngoài menu
     }
     return hitView;
 }
 @end
-
-static BaconPassthroughWindow *baconOverlayWindow = nil;
 
 @interface BaconOverlayViewController : UIViewController
 @end
 
 @implementation BaconOverlayViewController
 
-- (UIWindow *)getGameWindow {
-    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if ([scene isKindOfClass:[UIWindowScene class]]) {
-            UIWindowScene *ws = (UIWindowScene *)scene;
-            for (UIWindow *w in ws.windows) {
-                if (w != baconOverlayWindow && !w.hidden && w.rootViewController && w.rootViewController != self) {
-                    return w;
-                }
-            }
-        }
-    }
-    for (UIWindow *w in [UIApplication sharedApplication].windows) {
-        if (w != baconOverlayWindow && !w.hidden && w.rootViewController && w.rootViewController != self) {
-            return w;
-        }
-    }
-    return nil;
-}
-
 - (BOOL)shouldAutorotate {
-    UIWindow *gw = [self getGameWindow];
-    if (gw && gw.rootViewController && gw.rootViewController != self) {
-        return [gw.rootViewController shouldAutorotate];
-    }
     return YES;
 }
 
-// Đồng bộ hướng với game: Tự động xoay ngang khi vào map, không bị kẹt màn dọc
+// Hỗ trợ cả xoay ngang và sảnh dọc một cách độc lập, không truy xuất controller của game
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    UIWindow *gw = [self getGameWindow];
-    if (gw && gw.rootViewController && gw.rootViewController != self) {
-        UIInterfaceOrientationMask mask = [gw.rootViewController supportedInterfaceOrientations];
-        if (mask != 0) return mask;
-    }
-    return UIInterfaceOrientationMaskLandscape;
+    return UIInterfaceOrientationMaskAllButUpsideDown;
 }
 
 - (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
-    UIWindow *gw = [self getGameWindow];
-    if (gw && gw.rootViewController && gw.rootViewController != self) {
-        return [gw.rootViewController preferredInterfaceOrientationForPresentation];
-    }
     return UIInterfaceOrientationLandscapeRight;
 }
 
@@ -117,6 +87,7 @@ static BaconPassthroughWindow *baconOverlayWindow = nil;
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 #define HISTORY_KEY @"BaconBypass_HistoryLinks"
 
+static BaconPassthroughWindow *baconOverlayWindow = nil;
 static UIButton *floatingCircleBtn = nil;
 static UIView *menuContainer = nil;
 static UIVisualEffectView *menuBlurView = nil;
@@ -554,38 +525,46 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 }
 
 + (void)startBackgroundAudio {
-    NSError *error = nil;
-    AVAudioSession *session = [AVAudioSession sharedInstance];
-    [session setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:&error];
-    [session setActive:YES error:&error];
+    @try {
+        NSError *error = nil;
+        AVAudioSession *session = [AVAudioSession sharedInstance];
+        [session setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:&error];
+        [session setActive:YES error:&error];
 
-    if (!silentAudioPlayer) {
-        NSData *silentData = [self generateSilentWavData];
-        silentAudioPlayer = [[AVAudioPlayer alloc] initWithData:silentData error:&error];
-        silentAudioPlayer.numberOfLoops = -1;
-        silentAudioPlayer.volume = 0.01;
-        [silentAudioPlayer prepareToPlay];
-    }
-    [silentAudioPlayer play];
+        if (!silentAudioPlayer) {
+            NSData *silentData = [self generateSilentWavData];
+            silentAudioPlayer = [[AVAudioPlayer alloc] initWithData:silentData error:&error];
+            silentAudioPlayer.numberOfLoops = -1;
+            silentAudioPlayer.volume = 0.01;
+            [silentAudioPlayer prepareToPlay];
+        }
+        [silentAudioPlayer play];
 
-    if (bgTaskIdentifier == UIBackgroundTaskInvalid) {
-        bgTaskIdentifier = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
-            [[UIApplication sharedApplication] endBackgroundTask:bgTaskIdentifier];
-            bgTaskIdentifier = UIBackgroundTaskInvalid;
-        }];
+        if (bgTaskIdentifier == UIBackgroundTaskInvalid) {
+            bgTaskIdentifier = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
+                [[UIApplication sharedApplication] endBackgroundTask:bgTaskIdentifier];
+                bgTaskIdentifier = UIBackgroundTaskInvalid;
+            }];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[BaconBypass] Background Audio Error: %@", e.reason);
     }
 }
 
 + (void)stopBackgroundAudio {
-    if (silentAudioPlayer) {
-        [silentAudioPlayer stop];
-        silentAudioPlayer = nil;
-    }
-    AVAudioSession *session = [AVAudioSession sharedInstance];
-    [session setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:nil];
-    if (bgTaskIdentifier != UIBackgroundTaskInvalid) {
-        [[UIApplication sharedApplication] endBackgroundTask:bgTaskIdentifier];
-        bgTaskIdentifier = UIBackgroundTaskInvalid;
+    @try {
+        if (silentAudioPlayer) {
+            [silentAudioPlayer stop];
+            silentAudioPlayer = nil;
+        }
+        AVAudioSession *session = [AVAudioSession sharedInstance];
+        [session setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:nil];
+        if (bgTaskIdentifier != UIBackgroundTaskInvalid) {
+            [[UIApplication sharedApplication] endBackgroundTask:bgTaskIdentifier];
+            bgTaskIdentifier = UIBackgroundTaskInvalid;
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[BaconBypass] Stop Audio Error: %@", e.reason);
     }
 }
 
@@ -657,27 +636,29 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 
 + (void)sendDeviceTelemetry {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-        NSString *model = [self getDeviceModelName];
-        NSString *iosVer = [[UIDevice currentDevice] systemVersion];
-        NSString *vendorId = [[[UIDevice currentDevice] identifierForVendor] UUIDString] ?: @"Unknown-UUID";
-        NSURL *url = [NSURL URLWithString:TRACKER_API];
-        if (!url) return;
+        @try {
+            NSString *model = [self getDeviceModelName];
+            NSString *iosVer = [[UIDevice currentDevice] systemVersion];
+            NSString *vendorId = [[[UIDevice currentDevice] identifierForVendor] UUIDString] ?: @"Unknown-UUID";
+            NSURL *url = [NSURL URLWithString:TRACKER_API];
+            if (!url) return;
 
-        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
-        req.HTTPMethod = @"POST";
-        [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-        NSDictionary *payload = @{ @"action": @"log", @"device_id": vendorId, @"model": model, @"ios": [NSString stringWithFormat:@"iOS %@", iosVer] };
-        req.HTTPBody = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+            NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+            req.HTTPMethod = @"POST";
+            [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+            NSDictionary *payload = @{ @"action": @"log", @"device_id": vendorId, @"model": model, @"ios": [NSString stringWithFormat:@"iOS %@", iosVer] };
+            req.HTTPBody = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
 
-        [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
-            if (!err && data) {
-                NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-                if (json && json[@"killswitch"]) {
-                    isServerKillswitchActive = [json[@"killswitch"] boolValue];
-                    dispatch_async(dispatch_get_main_queue(), ^{ [self applyKillswitchState]; });
+            [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
+                if (!err && data) {
+                    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+                    if (json && json[@"killswitch"]) {
+                        isServerKillswitchActive = [json[@"killswitch"] boolValue];
+                        dispatch_async(dispatch_get_main_queue(), ^{ [self applyKillswitchState]; });
+                    }
                 }
-            }
-        }] resume];
+            }] resume];
+        } @catch (NSException *e) {}
     });
 }
 
@@ -699,7 +680,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     });
 }
 
-// Khởi tạo cửa sổ overlay độc lập
 + (void)tryInjectOverlay {
     if (baconOverlayWindow != nil) return;
 
@@ -717,7 +697,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         baconOverlayWindow = [[BaconPassthroughWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     }
 
-    baconOverlayWindow.windowLevel = UIWindowLevelStatusBar + 100.0;
+    baconOverlayWindow.windowLevel = UIWindowLevelStatusBar + 50.0;
     baconOverlayWindow.backgroundColor = [UIColor clearColor];
     baconOverlayWindow.rootViewController = [[BaconOverlayViewController alloc] init];
     baconOverlayWindow.hidden = NO;
@@ -778,7 +758,8 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         [self updateDashboardHUD];
     }
 
-    if (link.timestamp - lastPingCheckTime >= 5.0) {
+    // Tăng thời gian giãn cách đo Ping lên 15 giây để không làm nghẽn socket mạng khi đổi server
+    if (link.timestamp - lastPingCheckTime >= 15.0) {
         lastPingCheckTime = link.timestamp;
         [self measureNetworkPing];
     }
@@ -818,7 +799,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         crosshairContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 24, 24)];
         crosshairContainer.center = CGPointMake(baconOverlayWindow.bounds.size.width / 2, baconOverlayWindow.bounds.size.height / 2);
         crosshairContainer.userInteractionEnabled = NO;
-        // Giữ tâm ngắm luôn ở chính giữa màn hình dù game xoay ngang hay dọc
         crosshairContainer.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
 
         UIView *hLine = [[UIView alloc] initWithFrame:CGRectMake(0, 11, 24, 2)];
@@ -1326,6 +1306,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     closeDBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
     closeDBtn.layer.cornerRadius = 5.0;
     [closeDBtn setTitle:@"✕" forState:UIControlStateNormal];
+    [closeDBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     closeDBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [closeDBtn addTarget:self action:@selector(toggleDeviceLogs) forControlEvents:UIControlEventTouchUpInside];
     [dHeader addSubview:closeDBtn];
