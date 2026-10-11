@@ -1352,7 +1352,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
                 nickBtn.frame = CGRectMake(rowWidth - 68, 12, 62, 28);
                 nickBtn.backgroundColor = [UIColor colorWithRed:0.30 green:0.55 blue:0.85 alpha:1.0];
                 nickBtn.layer.cornerRadius = 5.0;
-                nickBtn.setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+                [nickBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
                 nickBtn.titleLabel.font = [UIFont boldSystemFontOfSize:10];
                 objc_setAssociatedObject(nickBtn, "targetDevID", dev[@"id"], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 [nickBtn addTarget:self action:@selector(promptEditNickname:) forControlEvents:UIControlEventTouchUpInside];
