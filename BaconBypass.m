@@ -10,24 +10,27 @@
 #include <stdlib.h>
 
 // ============================================================
-// 1. CỬA SỔ OVERLAY ĐỘC LẬP (KHÔNG CƯỚP KEYWINDOW CỦA GAME)
+// 1. CỬA SỔ OVERLAY ĐỘC LẬP (ĐỒNG BỘ CHẶT CHẼ HƯỚNG XOAY NGANG)
 // ============================================================
 @interface BaconPassthroughWindow : UIWindow
 @end
 
 @implementation BaconPassthroughWindow
 - (BOOL)canBecomeKeyWindow {
-    return NO; // Giữ nguyên keyWindow cho game, tránh crash khi đổi server
+    return NO; // Tuyệt đối không cướp keyWindow của Roblox/Delta để tránh văng khi đổi server
 }
 
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hitView = [super hitTest:point withEvent:event];
     if (hitView == self || hitView == self.rootViewController.view) {
-        return nil; // Chạm xuyên thấu xuống game khi bấm ra ngoài menu
+        return nil; // Cho phép tương tác chạm xuyên xuống game mượt mà
     }
     return hitView;
 }
 @end
+
+static BaconPassthroughWindow *baconOverlayWindow = nil;
+static UIView *crosshairContainer = nil;
 
 @interface BaconOverlayViewController : UIViewController
 @end
@@ -38,9 +41,9 @@
     return YES;
 }
 
-// Hỗ trợ cả xoay ngang và sảnh dọc một cách độc lập, không truy xuất controller của game
+// Khóa chặt chẽ chỉ cho phép xoay ngang đồng bộ với Info.plist, xóa sổ hoàn toàn lỗi mở màn dọc
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return UIInterfaceOrientationMaskAllButUpsideDown;
+    return UIInterfaceOrientationMaskLandscape;
 }
 
 - (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
@@ -49,6 +52,15 @@
 
 - (BOOL)prefersStatusBarHidden {
     return YES;
+}
+
+- (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+        if (crosshairContainer) {
+            crosshairContainer.center = CGPointMake(size.width / 2.0, size.height / 2.0);
+        }
+    } completion:nil];
 }
 
 @end
@@ -82,12 +94,11 @@
 @implementation BaconBypassOverlay
 
 #define ADMIN_PIN @"151009"
-#define DEFAULT_API_KEY @"Bacon-68e61ca9d455d316a50c-b4328879cadc0a77f8a5"
+#define DEFAULT_API_KEY @"Bacon-28fe90f03ab833ecdca1-1163020b864e1f997083"
 #define TRACKER_API @"https://ok.tdat1510009.workers.dev"
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 #define HISTORY_KEY @"BaconBypass_HistoryLinks"
 
-static BaconPassthroughWindow *baconOverlayWindow = nil;
 static UIButton *floatingCircleBtn = nil;
 static UIView *menuContainer = nil;
 static UIVisualEffectView *menuBlurView = nil;
@@ -120,7 +131,6 @@ static NSString *extractedLink = nil;
 // Tab Tiện ích
 static UIView *utilsTabContainer = nil;
 static UITextView *utilsResultDisplay = nil;
-static UIView *crosshairContainer = nil;
 static UIView *afkOverlay = nil;
 
 static UIButton *btnBackground = nil;
@@ -144,7 +154,6 @@ static NSInteger currentFPS = 60;
 static NSInteger currentPingMs = 0;
 static CFTimeInterval lastPingCheckTime = 0;
 static long currentAppRamMB = 0;
-static NSString *currentThermalStatus = @"❄️ Mát";
 
 + (void)triggerImpact:(UIImpactFeedbackStyle)style {
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -181,6 +190,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     }
 }
 
+// Đo Ping độc lập qua cấu hình riêng, không can thiệp sharedSession của Delta
 + (void)measureNetworkPing {
     static BOOL isMeasuring = NO;
     if (isMeasuring) return;
@@ -190,7 +200,11 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://1.1.1.1"] cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:2.0];
     req.HTTPMethod = @"HEAD";
 
-    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
+    NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    cfg.timeoutIntervalForRequest = 2.0;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:cfg];
+
+    [[session dataTaskWithRequest:req completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
         isMeasuring = NO;
         if (!error) {
             CFAbsoluteTime delta = CFAbsoluteTimeGetCurrent() - startTime;
@@ -198,6 +212,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         } else {
             currentPingMs = -1;
         }
+        [session finishTasksAndInvalidate];
     }] resume];
 }
 
@@ -546,9 +561,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
                 bgTaskIdentifier = UIBackgroundTaskInvalid;
             }];
         }
-    } @catch (NSException *e) {
-        NSLog(@"[BaconBypass] Background Audio Error: %@", e.reason);
-    }
+    } @catch (NSException *e) {}
 }
 
 + (void)stopBackgroundAudio {
@@ -563,9 +576,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
             [[UIApplication sharedApplication] endBackgroundTask:bgTaskIdentifier];
             bgTaskIdentifier = UIBackgroundTaskInvalid;
         }
-    } @catch (NSException *e) {
-        NSLog(@"[BaconBypass] Stop Audio Error: %@", e.reason);
-    }
+    } @catch (NSException *e) {}
 }
 
 + (void)toggleBackgroundExecution {
@@ -592,7 +603,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 }
 
 // ============================================================
-// ĐO RAM & NHIỆT ĐỘ
+// ĐO RAM
 // ============================================================
 + (long)getAppMemoryUsageMB {
     struct mach_task_basic_info info;
@@ -600,20 +611,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     kern_return_t kerr = task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &size);
     if (kerr == KERN_SUCCESS) return (long)(info.resident_size / (1024 * 1024));
     return 0;
-}
-
-+ (NSString *)getDeviceThermalStateDescription {
-    if (@available(iOS 11.0, *)) {
-        NSProcessInfoThermalState state = [NSProcessInfo processInfo].thermalState;
-        switch (state) {
-            case NSProcessInfoThermalStateNominal: return @"❄️ Mát";
-            case NSProcessInfoThermalStateFair: return @"🌤 Ấm";
-            case NSProcessInfoThermalStateSerious: return @"🔥 Nóng";
-            case NSProcessInfoThermalStateCritical: return @"🚨 Quá nhiệt";
-            default: return @"❄️ Mát";
-        }
-    }
-    return @"❄️ Mát";
 }
 
 + (NSString *)getDeviceModelName {
@@ -649,7 +646,11 @@ static NSString *currentThermalStatus = @"❄️ Mát";
             NSDictionary *payload = @{ @"action": @"log", @"device_id": vendorId, @"model": model, @"ios": [NSString stringWithFormat:@"iOS %@", iosVer] };
             req.HTTPBody = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
 
-            [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
+            NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+            cfg.timeoutIntervalForRequest = 4.0;
+            NSURLSession *session = [NSURLSession sessionWithConfiguration:cfg];
+
+            [[session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
                 if (!err && data) {
                     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
                     if (json && json[@"killswitch"]) {
@@ -657,6 +658,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
                         dispatch_async(dispatch_get_main_queue(), ^{ [self applyKillswitchState]; });
                     }
                 }
+                [session finishTasksAndInvalidate];
             }] resume];
         } @catch (NSException *e) {}
     });
@@ -754,14 +756,15 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         frameCount = 0;
         lastFpsTime = link.timestamp;
         currentAppRamMB = [self getAppMemoryUsageMB];
-        currentThermalStatus = [self getDeviceThermalStateDescription];
         [self updateDashboardHUD];
     }
 
-    // Tăng thời gian giãn cách đo Ping lên 15 giây để không làm nghẽn socket mạng khi đổi server
-    if (link.timestamp - lastPingCheckTime >= 15.0) {
-        lastPingCheckTime = link.timestamp;
-        [self measureNetworkPing];
+    // CHỈ đo ping khi MENU ĐANG MỞ, hoàn toàn ngắt mạng khi menu đóng để bảo vệ socket lúc đổi server
+    if (menuContainer && !menuContainer.hidden) {
+        if (link.timestamp - lastPingCheckTime >= 5.0) {
+            lastPingCheckTime = link.timestamp;
+            [self measureNetworkPing];
+        }
     }
 }
 
@@ -772,7 +775,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     NSString *timeStr = [df stringFromDate:[NSDate date]];
     float bat = [UIDevice currentDevice].batteryLevel;
     int batPct = (bat < 0) ? 100 : (int)(bat * 100.0f);
-    NSString *pingStr = (currentPingMs >= 0) ? [NSString stringWithFormat:@"%ldms", (long)currentPingMs] : @"Mất mạng";
+    NSString *pingStr = (currentPingMs >= 0) ? [NSString stringWithFormat:@"%ldms", (long)currentPingMs] : @"-";
     hudInfoLabel.text = [NSString stringWithFormat:@"⏱ %@ | 🔋 %d%% | ⚡ %ld FPS | 📶 %@ | 💾 %ld MB", timeStr, batPct, (long)currentFPS, pingStr, currentAppRamMB];
 }
 
@@ -1259,7 +1262,10 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     NSDictionary *body = @{ @"action": @"toggle_killswitch" };
     req.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
 
-    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
+    NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:cfg];
+
+    [[session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (err || !data) return;
             NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
@@ -1269,6 +1275,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
             resultDisplay.text = isK ? @"🚨 Đã BẬT Khóa từ xa (Dylib ở máy khác bị ẩn)!" : @"✅ Đã TẮT Khóa từ xa (Dylib hoạt động bình thường)!";
             resultDisplay.textColor = isK ? [UIColor colorWithRed:1.0 green:0.4 blue:0.3 alpha:1.0] : [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
         });
+        [session finishTasksAndInvalidate];
     }] resume];
 }
 
@@ -1337,7 +1344,10 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [deviceLogsScrollView addSubview:loadingLbl];
 
     NSURL *url = [NSURL URLWithString:TRACKER_API];
-    [[[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
+    NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:cfg];
+
+    [[session dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
         dispatch_async(dispatch_get_main_queue(), ^{
             for (UIView *v in deviceLogsScrollView.subviews) [v removeFromSuperview];
 
@@ -1397,6 +1407,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
             }
             deviceLogsScrollView.contentSize = CGSizeMake(deviceLogsContainer.bounds.size.width, y);
         });
+        [session finishTasksAndInvalidate];
     }] resume];
 }
 
@@ -1428,11 +1439,15 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     NSDictionary *body = @{ @"action": @"set_nickname", @"device_id": devID, @"nickname": name ?: @"" };
     req.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
 
-    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
+    NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:cfg];
+
+    [[session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self triggerNotify:UINotificationFeedbackTypeSuccess];
             [self fetchDeviceLogsFromServer];
         });
+        [session finishTasksAndInvalidate];
     }] resume];
 }
 
@@ -1638,7 +1653,11 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     NSDictionary *body = @{ @"url": url, @"apikey": key };
     req.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
 
-    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
+    NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    cfg.timeoutIntervalForRequest = 15.0;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:cfg];
+
+    [[session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (err || !data) {
                 [self triggerNotify:UINotificationFeedbackTypeError];
@@ -1660,6 +1679,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
                 resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
             }
         });
+        [session finishTasksAndInvalidate];
     }] resume];
 }
 
