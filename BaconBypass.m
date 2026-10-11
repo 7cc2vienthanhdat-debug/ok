@@ -10,7 +10,7 @@
 #include <stdlib.h>
 
 // ============================================================
-// 1. CỬA SỔ ĐỘC LẬP CHO PHÉP CHẠM XUYÊN THẤU (PASSTHROUGH WINDOW)
+// 1. CỬA SỔ OVERLAY ĐỘC LẬP (KHÔNG CHIẾM KEYWINDOW CỦA GAME)
 // ============================================================
 @interface BaconPassthroughWindow : UIWindow
 @end
@@ -18,9 +18,8 @@
 @implementation BaconPassthroughWindow
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hitView = [super hitTest:point withEvent:event];
-    // Nếu chạm vào vùng trống của cửa sổ overlay, cho phép sự kiện chạm xuyên xuống game Roblox
     if (hitView == self || hitView == self.rootViewController.view) {
-        return nil;
+        return nil; // Chạm xuyên thấu xuống màn hình game khi không bấm vào menu
     }
     return hitView;
 }
@@ -32,10 +31,11 @@
 @implementation BaconOverlayViewController
 - (BOOL)shouldAutorotate { return YES; }
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskAll; }
+- (BOOL)prefersStatusBarHidden { return YES; }
 @end
 
 // ============================================================
-// 2. ĐỐI TƯỢNG QUẢN LÝ TAB WEB NỔI (FLOATING WEB BUBBLE)
+// 2. QUẢN LÝ TAB WEB BÓNG TRÒN NỔI (FLOATING BUBBLE)
 // ============================================================
 @interface BaconWebTab : NSObject
 @property (nonatomic, assign) NSInteger tabId;
@@ -53,7 +53,7 @@
 @end
 
 // ============================================================
-// 3. MAIN CONTROLLER VÀ GIAO DIỆN HỆ THỐNG
+// 3. MAIN CONTROLLER & HỆ THỐNG TIỆN ÍCH BACONBYPASS
 // ============================================================
 @interface BaconBypassOverlay : NSObject <WKNavigationDelegate>
 + (void)load;
@@ -183,7 +183,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 }
 
 // ============================================================
-// XỬ LÝ FPS LIMITER & ÂM THANH GAME
+// FPS LIMITER & MUTE GAME
 // ============================================================
 + (void)cycleFPSTarget {
     [self triggerImpact:UIImpactFeedbackStyleMedium];
@@ -318,9 +318,9 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 
     NSArray *quickSites = @[
         @{@"t": @"YouTube", @"u": @"https://m.youtube.com"},
-        @{@"t": @"TikTok", @"u": @"https://www.tiktok.com"},
+        @{@"t": @"TikTok",  @"u": @"https://www.tiktok.com"},
         @{@"t": @"Facebook",@"u": @"https://m.facebook.com"},
-        @{@"t": @"Google", @"u": @"https://www.google.com"}
+        @{@"t": @"Google",  @"u": @"https://www.google.com"}
     ];
     CGFloat btnW = bWidth / quickSites.count;
     for (int i = 0; i < quickSites.count; i++) {
@@ -472,7 +472,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 }
 
 // ============================================================
-// CHẠY NGẦM ÂM THANH IM LẶNG
+// CHẠY NGẦM LIÊN TỤC
 // ============================================================
 + (NSData *)generateSilentWavData {
     NSMutableData *data = [NSMutableData data];
@@ -645,7 +645,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 + (void)load {
     bgTaskIdentifier = UIBackgroundTaskInvalid;
     [UIDevice currentDevice].batteryMonitoringEnabled = YES;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [self tryInjectOverlay];
         [self sendDeviceTelemetry];
     });
@@ -679,7 +679,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 }
 
 // ============================================================
-// VÒNG LẶP RENDER & CẬP NHẬT HUD (FPS & PING)
+// VÒNG LẶP RENDER & CẬP NHẬT HUD
 // ============================================================
 + (void)startDisplayLoop {
     if (renderLoop) return;
@@ -762,7 +762,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 }
 
 // ============================================================
-// HÀM TIỆN ÍCH CƠ BẢN (CROSSHAIR, AFK, RAM CLEANER)
+// HÀM TIỆN ÍCH CƠ BẢN
 // ============================================================
 + (void)toggleCrosshair {
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
@@ -837,7 +837,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 }
 
 // ============================================================
-// THIẾT KẾ GIAO DIỆN CHÍNH
+// GIAO DIỆN CHÍNH
 // ============================================================
 + (void)setupViewsInWindow:(UIWindow *)targetWindow {
     UIView *rootV = targetWindow.rootViewController.view;
@@ -1352,8 +1352,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
                 nickBtn.frame = CGRectMake(rowWidth - 68, 12, 62, 28);
                 nickBtn.backgroundColor = [UIColor colorWithRed:0.30 green:0.55 blue:0.85 alpha:1.0];
                 nickBtn.layer.cornerRadius = 5.0;
-                [nickBtn setTitle:@"🏷️ Đặt Tên" forState:UIControlStateNormal];
-                [nickBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+                nickBtn.setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
                 nickBtn.titleLabel.font = [UIFont boldSystemFontOfSize:10];
                 objc_setAssociatedObject(nickBtn, "targetDevID", dev[@"id"], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 [nickBtn addTarget:self action:@selector(promptEditNickname:) forControlEvents:UIControlEventTouchUpInside];
@@ -1415,7 +1414,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     historyContainer.hidden = YES;
 
     UIView *hHeader = [[UIView alloc] initWithFrame:CGRectMake(0, 0, hWidth, 36)];
-    hHeader.backgroundColor = [UIColor colorWithRed:0.14 green:0.10 blue:0.18 alpha:1.0];
+    hHeader.backgroundColor = [UIColor colorWithRed:0.14 green:0.10 blue:0.20 alpha:1.0];
     [historyContainer addSubview:hHeader];
 
     UILabel *hTitle = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, 180, 36)];
