@@ -10,7 +10,7 @@
 #include <stdlib.h>
 
 // ============================================================
-// 1. CỬA SỔ OVERLAY ĐỘC LẬP (KHÔNG CHIẾM KEYWINDOW CỦA GAME)
+// 1. CỬA SỔ OVERLAY ĐỘC LẬP & TỰ ĐỒNG BỘ XOAY NGANG VỚI GAME
 // ============================================================
 @interface BaconPassthroughWindow : UIWindow
 @end
@@ -25,17 +25,66 @@
 }
 @end
 
+static BaconPassthroughWindow *baconOverlayWindow = nil;
+
 @interface BaconOverlayViewController : UIViewController
 @end
 
 @implementation BaconOverlayViewController
-- (BOOL)shouldAutorotate { return YES; }
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskAll; }
-- (BOOL)prefersStatusBarHidden { return YES; }
+
+- (UIWindow *)getGameWindow {
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if ([scene isKindOfClass:[UIWindowScene class]]) {
+            UIWindowScene *ws = (UIWindowScene *)scene;
+            for (UIWindow *w in ws.windows) {
+                if (w != baconOverlayWindow && !w.hidden && w.rootViewController && w.rootViewController != self) {
+                    return w;
+                }
+            }
+        }
+    }
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        if (w != baconOverlayWindow && !w.hidden && w.rootViewController && w.rootViewController != self) {
+            return w;
+        }
+    }
+    return nil;
+}
+
+- (BOOL)shouldAutorotate {
+    UIWindow *gw = [self getGameWindow];
+    if (gw && gw.rootViewController && gw.rootViewController != self) {
+        return [gw.rootViewController shouldAutorotate];
+    }
+    return YES;
+}
+
+// Đồng bộ hướng với game: Tự động xoay ngang khi vào map, không bị kẹt màn dọc
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    UIWindow *gw = [self getGameWindow];
+    if (gw && gw.rootViewController && gw.rootViewController != self) {
+        UIInterfaceOrientationMask mask = [gw.rootViewController supportedInterfaceOrientations];
+        if (mask != 0) return mask;
+    }
+    return UIInterfaceOrientationMaskLandscape;
+}
+
+- (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
+    UIWindow *gw = [self getGameWindow];
+    if (gw && gw.rootViewController && gw.rootViewController != self) {
+        return [gw.rootViewController preferredInterfaceOrientationForPresentation];
+    }
+    return UIInterfaceOrientationLandscapeRight;
+}
+
+- (BOOL)prefersStatusBarHidden {
+    return YES;
+}
+
 @end
 
 // ============================================================
-// 2. QUẢN LÝ TAB WEB BÓNG TRÒN NỔI (FLOATING BUBBLE)
+// 2. ĐỐI TƯỢNG QUẢN LÝ TAB WEB BÓNG TRÒN NỔI
 // ============================================================
 @interface BaconWebTab : NSObject
 @property (nonatomic, assign) NSInteger tabId;
@@ -68,7 +117,6 @@
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 #define HISTORY_KEY @"BaconBypass_HistoryLinks"
 
-static BaconPassthroughWindow *baconOverlayWindow = nil;
 static UIButton *floatingCircleBtn = nil;
 static UIView *menuContainer = nil;
 static UIVisualEffectView *menuBlurView = nil;
@@ -168,7 +216,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     isMeasuring = YES;
 
     CFAbsoluteTime startTime = CFAbsoluteTimeGetCurrent();
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://1.1.1.1"] cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:1.5];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://1.1.1.1"] cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:2.0];
     req.HTTPMethod = @"HEAD";
 
     [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
@@ -730,7 +778,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         [self updateDashboardHUD];
     }
 
-    if (link.timestamp - lastPingCheckTime >= 2.0) {
+    if (link.timestamp - lastPingCheckTime >= 5.0) {
         lastPingCheckTime = link.timestamp;
         [self measureNetworkPing];
     }
@@ -770,6 +818,8 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         crosshairContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 24, 24)];
         crosshairContainer.center = CGPointMake(baconOverlayWindow.bounds.size.width / 2, baconOverlayWindow.bounds.size.height / 2);
         crosshairContainer.userInteractionEnabled = NO;
+        // Giữ tâm ngắm luôn ở chính giữa màn hình dù game xoay ngang hay dọc
+        crosshairContainer.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
 
         UIView *hLine = [[UIView alloc] initWithFrame:CGRectMake(0, 11, 24, 2)];
         hLine.backgroundColor = [UIColor colorWithRed:0.2 green:1.0 blue:0.2 alpha:1.0];
@@ -844,6 +894,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 
     floatingCircleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     floatingCircleBtn.frame = CGRectMake(25, 120, 42, 42);
+    floatingCircleBtn.autoresizingMask = UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleBottomMargin;
 
     UIBlurEffect *btnBlur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
     UIVisualEffectView *btnBlurView = [[UIVisualEffectView alloc] initWithEffect:btnBlur];
@@ -880,6 +931,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     CGFloat menuWidth = 340.0;
     CGFloat menuHeight = 250.0;
     menuContainer = [[UIView alloc] initWithFrame:CGRectMake((targetWindow.bounds.size.width - menuWidth) / 2, 80, menuWidth, menuHeight)];
+    menuContainer.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleBottomMargin;
     menuContainer.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.15];
     menuContainer.layer.cornerRadius = 24.0;
     menuContainer.layer.shadowColor = [UIColor blackColor].CGColor;
@@ -1352,6 +1404,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
                 nickBtn.frame = CGRectMake(rowWidth - 68, 12, 62, 28);
                 nickBtn.backgroundColor = [UIColor colorWithRed:0.30 green:0.55 blue:0.85 alpha:1.0];
                 nickBtn.layer.cornerRadius = 5.0;
+                [nickBtn setTitle:@"🏷️ Đặt Tên" forState:UIControlStateNormal];
                 [nickBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
                 nickBtn.titleLabel.font = [UIFont boldSystemFontOfSize:10];
                 objc_setAssociatedObject(nickBtn, "targetDevID", dev[@"id"], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
