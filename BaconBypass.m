@@ -10,66 +10,32 @@
 #include <stdlib.h>
 
 // ============================================================
-// 1. TẦNG BẢO VỆ CHỐNG VĂNG: CHẶN LỆNH TỰ NGẮT (EXIT / ABORT)
+// 1. CỬA SỔ ĐỘC LẬP CHO PHÉP CHẠM XUYÊN THẤU (PASSTHROUGH WINDOW)
 // ============================================================
-void my_exit(int code) {
-    NSLog(@"[BaconAntiCrash] Game gọi exit(%d) -> Đã triệt tiêu!", code);
-    return;
-}
-
-void my_abort(void) {
-    NSLog(@"[BaconAntiCrash] Game gọi abort() -> Đã triệt tiêu!");
-    return;
-}
-
-void my__exit(int code) {
-    NSLog(@"[BaconAntiCrash] Game gọi _exit(%d) -> Đã triệt tiêu!", code);
-    return;
-}
-
-#define DYLD_INTERPOSE(_replacement,_replacee) \
-   __attribute__((used)) static struct{ const void* replacement; const void* replacee; } _interpose_##_replacee \
-            __attribute__((section ("__DATA,__interpose"))) = { (const void*)(unsigned long)&_replacement, (const void*)(unsigned long)&_replacee };
-
-DYLD_INTERPOSE(my_exit, exit)
-DYLD_INTERPOSE(my_abort, abort)
-DYLD_INTERPOSE(my__exit, _exit)
-
-// ============================================================
-// 2. FAKE BIÊN LAI APP STORE & CHE GIẤU DẤU VẾT SIDELOAD
-// ============================================================
-@interface NSFileManager (BaconAntiCrash)
+@interface BaconPassthroughWindow : UIWindow
 @end
 
-@implementation NSFileManager (BaconAntiCrash)
-+ (void)load {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        Class cls = [NSFileManager class];
-        SEL origSel = @selector(fileExistsAtPath:);
-        SEL swizzSel = @selector(bacon_fileExistsAtPath:);
-        Method origMethod = class_getInstanceMethod(cls, origSel);
-        Method swizzMethod = class_getInstanceMethod(cls, swizzSel);
-        if (origMethod && swizzMethod) {
-            method_exchangeImplementations(origMethod, swizzMethod);
-        }
-    });
-}
-
-- (BOOL)bacon_fileExistsAtPath:(NSString *)path {
-    if (!path) return NO;
-    if ([path containsString:@"_MASReceipt"] || [path containsString:@"receipt"] || [path containsString:@"embedded.mobileprovision"]) {
-        return YES;
+@implementation BaconPassthroughWindow
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *hitView = [super hitTest:point withEvent:event];
+    // Nếu chạm vào vùng trống của cửa sổ overlay, cho phép sự kiện chạm xuyên xuống game Roblox
+    if (hitView == self || hitView == self.rootViewController.view) {
+        return nil;
     }
-    if ([path containsString:@"Cydia"] || [path containsString:@"Sileo"] || [path containsString:@"TrollStore"] || [path containsString:@"bin/bash"] || [path containsString:@"/Library/MobileSubstrate"]) {
-        return NO;
-    }
-    return [self bacon_fileExistsAtPath:path];
+    return hitView;
 }
 @end
 
+@interface BaconOverlayViewController : UIViewController
+@end
+
+@implementation BaconOverlayViewController
+- (BOOL)shouldAutorotate { return YES; }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskAll; }
+@end
+
 // ============================================================
-// 3. QUẢN LÝ TAB WEB NỔI (FLOATING WEB BUBBLE)
+// 2. ĐỐI TƯỢNG QUẢN LÝ TAB WEB NỔI (FLOATING WEB BUBBLE)
 // ============================================================
 @interface BaconWebTab : NSObject
 @property (nonatomic, assign) NSInteger tabId;
@@ -87,7 +53,7 @@ DYLD_INTERPOSE(my__exit, _exit)
 @end
 
 // ============================================================
-// 4. MAIN CONTROLLER VÀ GIAO DIỆN HỆ THỐNG
+// 3. MAIN CONTROLLER VÀ GIAO DIỆN HỆ THỐNG
 // ============================================================
 @interface BaconBypassOverlay : NSObject <WKNavigationDelegate>
 + (void)load;
@@ -102,7 +68,7 @@ DYLD_INTERPOSE(my__exit, _exit)
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 #define HISTORY_KEY @"BaconBypass_HistoryLinks"
 
-static UIWindow *robloxWindow = nil;
+static BaconPassthroughWindow *baconOverlayWindow = nil;
 static UIButton *floatingCircleBtn = nil;
 static UIView *menuContainer = nil;
 static UIVisualEffectView *menuBlurView = nil;
@@ -276,9 +242,9 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     tab.tabId = nextTabId++;
     tab.isMinimized = NO;
 
-    CGFloat bWidth = MIN(robloxWindow.bounds.size.width - 24, 360.0);
+    CGFloat bWidth = MIN(baconOverlayWindow.bounds.size.width - 24, 360.0);
     CGFloat bHeight = 460.0;
-    tab.windowView = [[UIView alloc] initWithFrame:CGRectMake((robloxWindow.bounds.size.width - bWidth) / 2, 70, bWidth, bHeight)];
+    tab.windowView = [[UIView alloc] initWithFrame:CGRectMake((baconOverlayWindow.bounds.size.width - bWidth) / 2, 70, bWidth, bHeight)];
     tab.windowView.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.98];
     tab.windowView.layer.cornerRadius = 16.0;
     tab.windowView.layer.borderWidth = 1.2;
@@ -352,9 +318,9 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 
     NSArray *quickSites = @[
         @{@"t": @"YouTube", @"u": @"https://m.youtube.com"},
-        @{@"t": @"TikTok",  @"u": @"https://www.tiktok.com"},
+        @{@"t": @"TikTok", @"u": @"https://www.tiktok.com"},
         @{@"t": @"Facebook",@"u": @"https://m.facebook.com"},
-        @{@"t": @"Google",  @"u": @"https://www.google.com"}
+        @{@"t": @"Google", @"u": @"https://www.google.com"}
     ];
     CGFloat btnW = bWidth / quickSites.count;
     for (int i = 0; i < quickSites.count; i++) {
@@ -381,7 +347,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [tab.windowView addSubview:tab.webView];
 
     tab.bubbleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    tab.bubbleBtn.frame = CGRectMake(robloxWindow.bounds.size.width - 55, 150 + (webTabsList.count * 50), 44, 44);
+    tab.bubbleBtn.frame = CGRectMake(baconOverlayWindow.bounds.size.width - 55, 150 + (webTabsList.count * 50), 44, 44);
     tab.bubbleBtn.layer.cornerRadius = 22.0;
     tab.bubbleBtn.layer.borderWidth = 2.0;
     tab.bubbleBtn.layer.borderColor = tab.themeColor.CGColor;
@@ -405,8 +371,8 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     UIPanGestureRecognizer *panBubble = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragBubble:)];
     [tab.bubbleBtn addGestureRecognizer:panBubble];
 
-    [robloxWindow addSubview:tab.bubbleBtn];
-    [robloxWindow addSubview:tab.windowView];
+    [baconOverlayWindow.rootViewController.view addSubview:tab.bubbleBtn];
+    [baconOverlayWindow.rootViewController.view addSubview:tab.windowView];
     [webTabsList addObject:tab];
 
     [self loadTabURL:tab url:urlString];
@@ -445,7 +411,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     tab.isMinimized = YES;
     tab.windowView.hidden = YES;
     tab.bubbleBtn.hidden = NO;
-    [robloxWindow bringSubviewToFront:tab.bubbleBtn];
+    [baconOverlayWindow.rootViewController.view bringSubviewToFront:tab.bubbleBtn];
 }
 
 + (void)restoreTabFromBubble:(UIButton *)sender {
@@ -455,7 +421,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     tab.isMinimized = NO;
     tab.bubbleBtn.hidden = YES;
     tab.windowView.hidden = NO;
-    [robloxWindow bringSubviewToFront:tab.windowView];
+    [baconOverlayWindow.rootViewController.view bringSubviewToFront:tab.windowView];
 }
 
 + (void)closeTab:(UIButton *)sender {
@@ -679,37 +645,36 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 + (void)load {
     bgTaskIdentifier = UIBackgroundTaskInvalid;
     [UIDevice currentDevice].batteryMonitoringEnabled = YES;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [self tryInjectOverlay];
         [self sendDeviceTelemetry];
     });
 }
 
-+ (UIWindow *)findRobloxWindow {
+// Khởi tạo cửa sổ overlay độc lập
++ (void)tryInjectOverlay {
+    if (baconOverlayWindow != nil) return;
+
+    UIWindowScene *activeScene = nil;
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
         if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
-            UIWindowScene *windowScene = (UIWindowScene *)scene;
-            for (UIWindow *win in windowScene.windows) {
-                if (win.rootViewController != nil && !win.hidden) return win;
-            }
+            activeScene = (UIWindowScene *)scene;
+            break;
         }
     }
-    for (UIWindow *win in [UIApplication sharedApplication].windows) {
-        if (win.rootViewController != nil && !win.hidden) return win;
-    }
-    return nil;
-}
 
-+ (void)tryInjectOverlay {
-    if (floatingCircleBtn != nil) return;
-    robloxWindow = [self findRobloxWindow];
-    if (!robloxWindow || !robloxWindow.rootViewController) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [self tryInjectOverlay];
-        });
-        return;
+    if (activeScene) {
+        baconOverlayWindow = [[BaconPassthroughWindow alloc] initWithWindowScene:activeScene];
+    } else {
+        baconOverlayWindow = [[BaconPassthroughWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     }
-    [self setupViewsInWindow:robloxWindow];
+
+    baconOverlayWindow.windowLevel = UIWindowLevelStatusBar + 100.0;
+    baconOverlayWindow.backgroundColor = [UIColor clearColor];
+    baconOverlayWindow.rootViewController = [[BaconOverlayViewController alloc] init];
+    baconOverlayWindow.hidden = NO;
+
+    [self setupViewsInWindow:baconOverlayWindow];
     [self startDisplayLoop];
 }
 
@@ -803,7 +768,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
     if (!crosshairContainer) {
         crosshairContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 24, 24)];
-        crosshairContainer.center = CGPointMake(robloxWindow.bounds.size.width / 2, robloxWindow.bounds.size.height / 2);
+        crosshairContainer.center = CGPointMake(baconOverlayWindow.bounds.size.width / 2, baconOverlayWindow.bounds.size.height / 2);
         crosshairContainer.userInteractionEnabled = NO;
 
         UIView *hLine = [[UIView alloc] initWithFrame:CGRectMake(0, 11, 24, 2)];
@@ -814,7 +779,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         vLine.backgroundColor = [UIColor colorWithRed:0.2 green:1.0 blue:0.2 alpha:1.0];
         [crosshairContainer addSubview:vLine];
 
-        [robloxWindow addSubview:crosshairContainer];
+        [baconOverlayWindow.rootViewController.view addSubview:crosshairContainer];
         [self triggerNotify:UINotificationFeedbackTypeSuccess];
         utilsResultDisplay.text = @"🎯 Đã Bật Tâm ngắm ảo giữa màn hình.";
     } else {
@@ -827,7 +792,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 + (void)toggleAFKMode {
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
     if (!afkOverlay) {
-        afkOverlay = [[UIView alloc] initWithFrame:robloxWindow.bounds];
+        afkOverlay = [[UIView alloc] initWithFrame:baconOverlayWindow.bounds];
         afkOverlay.backgroundColor = [UIColor blackColor];
         afkOverlay.alpha = 0.0;
         afkOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -843,10 +808,10 @@ static NSString *currentThermalStatus = @"❄️ Mát";
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(exitAFKMode)];
         tap.numberOfTapsRequired = 2;
         [afkOverlay addGestureRecognizer:tap];
-        [robloxWindow addSubview:afkOverlay];
+        [baconOverlayWindow.rootViewController.view addSubview:afkOverlay];
     }
 
-    [robloxWindow bringSubviewToFront:afkOverlay];
+    [baconOverlayWindow.rootViewController.view bringSubviewToFront:afkOverlay];
     [self minimizeMenu];
     [UIView animateWithDuration:0.5 animations:^{ afkOverlay.alpha = 1.0; }];
     [self triggerNotify:UINotificationFeedbackTypeSuccess];
@@ -875,6 +840,8 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 // THIẾT KẾ GIAO DIỆN CHÍNH
 // ============================================================
 + (void)setupViewsInWindow:(UIWindow *)targetWindow {
+    UIView *rootV = targetWindow.rootViewController.view;
+
     floatingCircleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     floatingCircleBtn.frame = CGRectMake(25, 120, 42, 42);
 
@@ -903,7 +870,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [floatingCircleBtn addTarget:self action:@selector(openMenu) forControlEvents:UIControlEventTouchUpInside];
     UIPanGestureRecognizer *panBtn = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragCircle:)];
     [floatingCircleBtn addGestureRecognizer:panBtn];
-    [targetWindow addSubview:floatingCircleBtn];
+    [rootV addSubview:floatingCircleBtn];
 
     NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
     CGFloat savedCircleX = [defs floatForKey:@"BaconBypass_CirclePosX"];
@@ -1087,7 +1054,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [resultBox addSubview:resultDisplay];
 
     // ==========================================
-    // TAB 2: TIỆN ÍCH ALL-GAME (GỌN GÀNG, KHÔNG LỖI)
+    // TAB 2: TIỆN ÍCH ALL-GAME
     // ==========================================
     utilsTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, bodyY, menuWidth, menuHeight - bodyY)];
     utilsTabContainer.hidden = YES;
@@ -1095,7 +1062,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 
     CGFloat halfBtnW = (menuWidth - 40) / 2;
 
-    // Hàng 1: Tâm ngắm & Treo ngầm
     UIButton *btnCrosshair = [self createGlassButtonWithFrame:CGRectMake(16, 4, halfBtnW, 34) title:@"🎯 Tâm Ngắm" color:[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0]];
     [btnCrosshair addTarget:self action:@selector(toggleCrosshair) forControlEvents:UIControlEventTouchUpInside];
     [utilsTabContainer addSubview:btnCrosshair];
@@ -1104,7 +1070,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [btnBackground addTarget:self action:@selector(toggleBackgroundExecution) forControlEvents:UIControlEventTouchUpInside];
     [utilsTabContainer addSubview:btnBackground];
 
-    // Hàng 2: Mở khóa FPS & Mute âm thanh game
     btnFPSUnlock = [self createGlassButtonWithFrame:CGRectMake(16, 42, halfBtnW, 34) title:@"⚡ FPS: 60Hz" color:[UIColor colorWithRed:0.9 green:0.5 blue:0.1 alpha:1.0]];
     [btnFPSUnlock addTarget:self action:@selector(cycleFPSTarget) forControlEvents:UIControlEventTouchUpInside];
     [utilsTabContainer addSubview:btnFPSUnlock];
@@ -1113,7 +1078,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [btnMuteGame addTarget:self action:@selector(toggleMuteGameAudio) forControlEvents:UIControlEventTouchUpInside];
     [utilsTabContainer addSubview:btnMuteGame];
 
-    // Hàng 3: Màn hình AFK & Dọn RAM
     UIButton *btnAFK = [self createGlassButtonWithFrame:CGRectMake(16, 80, halfBtnW, 34) title:@"🌙 Màn Hình AFK" color:[UIColor colorWithRed:0.6 green:0.4 blue:0.9 alpha:1.0]];
     [btnAFK addTarget:self action:@selector(toggleAFKMode) forControlEvents:UIControlEventTouchUpInside];
     [utilsTabContainer addSubview:btnAFK];
@@ -1122,7 +1086,6 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [btnRAM addTarget:self action:@selector(cleanRAM) forControlEvents:UIControlEventTouchUpInside];
     [utilsTabContainer addSubview:btnRAM];
 
-    // Khung hiển thị thông báo tiện ích
     UIView *uResultBox = [[UIView alloc] initWithFrame:CGRectMake(16, 118, menuWidth - 32, 45)];
     uResultBox.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.25];
     uResultBox.layer.cornerRadius = 10.0;
@@ -1139,7 +1102,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     utilsResultDisplay.selectable = YES;
     [uResultBox addSubview:utilsResultDisplay];
 
-    [targetWindow addSubview:menuContainer];
+    [rootV addSubview:menuContainer];
 
     [self setupHistoryOverlayInWindow:targetWindow];
     [self setupDeviceLogsOverlayInWindow:targetWindow];
@@ -1147,15 +1110,16 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [self updateLayoutForAdminState:NO];
 
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-        if (robloxWindow) {
-            [robloxWindow bringSubviewToFront:afkOverlay];
-            [robloxWindow bringSubviewToFront:crosshairContainer];
-            [robloxWindow bringSubviewToFront:floatingCircleBtn];
-            [robloxWindow bringSubviewToFront:menuContainer];
+        if (baconOverlayWindow) {
+            UIView *rv = baconOverlayWindow.rootViewController.view;
+            [rv bringSubviewToFront:afkOverlay];
+            [rv bringSubviewToFront:crosshairContainer];
+            [rv bringSubviewToFront:floatingCircleBtn];
+            [rv bringSubviewToFront:menuContainer];
             if (webTabsList) {
                 for (BaconWebTab *tab in webTabsList) {
-                    if (!tab.isMinimized) [robloxWindow bringSubviewToFront:tab.windowView];
-                    if (tab.isMinimized) [robloxWindow bringSubviewToFront:tab.bubbleBtn];
+                    if (!tab.isMinimized) [rv bringSubviewToFront:tab.windowView];
+                    if (tab.isMinimized) [rv bringSubviewToFront:tab.bubbleBtn];
                 }
             }
         }
@@ -1214,7 +1178,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 
 + (void)handleAdminSecretTap {
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
-    UIViewController *topVC = robloxWindow.rootViewController;
+    UIViewController *topVC = baconOverlayWindow.rootViewController;
     while (topVC.presentedViewController) topVC = topVC.presentedViewController;
     if (!topVC) return;
 
@@ -1310,21 +1274,21 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     closeDBtn.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
     closeDBtn.layer.cornerRadius = 5.0;
     [closeDBtn setTitle:@"✕" forState:UIControlStateNormal];
-    [closeDBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     closeDBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [closeDBtn addTarget:self action:@selector(toggleDeviceLogs) forControlEvents:UIControlEventTouchUpInside];
     [dHeader addSubview:closeDBtn];
 
     deviceLogsScrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 36, dWidth, dHeight - 36)];
     [deviceLogsContainer addSubview:deviceLogsScrollView];
-    [window addSubview:deviceLogsContainer];
+
+    [window.rootViewController.view addSubview:deviceLogsContainer];
 }
 
 + (void)toggleDeviceLogs {
     [self triggerImpact:UIImpactFeedbackStyleLight];
     deviceLogsContainer.hidden = !deviceLogsContainer.hidden;
     if (!deviceLogsContainer.hidden) {
-        [robloxWindow bringSubviewToFront:deviceLogsContainer];
+        [baconOverlayWindow.rootViewController.view bringSubviewToFront:deviceLogsContainer];
         [self fetchDeviceLogsFromServer];
     }
 }
@@ -1408,7 +1372,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     NSString *devID = objc_getAssociatedObject(sender, "targetDevID");
     if (!devID) return;
 
-    UIViewController *topVC = robloxWindow.rootViewController;
+    UIViewController *topVC = baconOverlayWindow.rootViewController;
     while (topVC.presentedViewController) topVC = topVC.presentedViewController;
     if (!topVC) return;
 
@@ -1451,7 +1415,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     historyContainer.hidden = YES;
 
     UIView *hHeader = [[UIView alloc] initWithFrame:CGRectMake(0, 0, hWidth, 36)];
-    hHeader.backgroundColor = [UIColor colorWithRed:0.14 green:0.14 blue:0.18 alpha:1.0];
+    hHeader.backgroundColor = [UIColor colorWithRed:0.14 green:0.10 blue:0.18 alpha:1.0];
     [historyContainer addSubview:hHeader];
 
     UILabel *hTitle = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, 180, 36)];
@@ -1471,7 +1435,8 @@ static NSString *currentThermalStatus = @"❄️ Mát";
 
     historyScrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 36, hWidth, hHeight - 36)];
     [historyContainer addSubview:historyScrollView];
-    [window addSubview:historyContainer];
+
+    [window.rootViewController.view addSubview:historyContainer];
 }
 
 + (void)saveLinkToHistory:(NSString *)link {
@@ -1488,7 +1453,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [self triggerImpact:UIImpactFeedbackStyleLight];
     historyContainer.hidden = !historyContainer.hidden;
     if (!historyContainer.hidden) {
-        [robloxWindow bringSubviewToFront:historyContainer];
+        [baconOverlayWindow.rootViewController.view bringSubviewToFront:historyContainer];
         [self reloadHistoryList];
     }
 }
@@ -1555,7 +1520,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     [self triggerImpact:UIImpactFeedbackStyleMedium];
     menuContainer.hidden = NO;
     floatingCircleBtn.hidden = YES;
-    [robloxWindow bringSubviewToFront:menuContainer];
+    [baconOverlayWindow.rootViewController.view bringSubviewToFront:menuContainer];
     if (!isUtilsTabActive) [self autoDetectClipboardLink];
 }
 
@@ -1567,7 +1532,7 @@ static NSString *currentThermalStatus = @"❄️ Mát";
     historyContainer.hidden = YES;
     deviceLogsContainer.hidden = YES;
     floatingCircleBtn.hidden = NO;
-    [robloxWindow bringSubviewToFront:floatingCircleBtn];
+    [baconOverlayWindow.rootViewController.view bringSubviewToFront:floatingCircleBtn];
 }
 
 + (NSString *)cleanString:(NSString *)str {
