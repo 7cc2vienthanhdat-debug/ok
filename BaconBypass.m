@@ -10,7 +10,7 @@
 #include <stdlib.h>
 
 // ============================================================
-// 1. CỬA SỔ OVERLAY ĐỘC LẬP (CẤP KEYWINDOW ĐỘNG ĐỂ HIỆN BÀN PHÍM)
+// 1. CỬA SỔ OVERLAY ĐỘC LẬP (QUẢN LÝ KEYWINDOW ĐỘNG)
 // ============================================================
 static BOOL g_overlayCanBeKey = NO;
 
@@ -19,15 +19,13 @@ static BOOL g_overlayCanBeKey = NO;
 
 @implementation BaconPassthroughWindow
 - (BOOL)canBecomeKeyWindow {
-    // Chỉ nhận keyWindow khi mở menu hoặc nhập mã PIN để hiển thị bàn phím ảo.
-    // Lúc chơi game hoặc đổi server, tự động trả keyWindow về cho Roblox để chống văng.
-    return g_overlayCanBeKey;
+    return g_overlayCanBeKey; // Nhận keyWindow khi mở menu/nhập dữ liệu để hiển thị bàn phím ảo
 }
 
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hitView = [super hitTest:point withEvent:event];
     if (hitView == self || hitView == self.rootViewController.view) {
-        return nil; // Chạm xuyên thấu xuống màn hình game khi bấm ra ngoài menu
+        return nil; // Chạm xuyên thấu xuống game khi bấm ra ngoài menu
     }
     return hitView;
 }
@@ -45,7 +43,7 @@ static UIView *crosshairContainer = nil;
     return YES;
 }
 
-// Cho phép cả dọc (ở sảnh) và ngang (khi vào phòng chơi)
+// Cho phép cả màn hình dọc (ở sảnh) và màn hình ngang (khi vào phòng chơi)
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
     return UIInterfaceOrientationMaskAllButUpsideDown;
 }
@@ -54,7 +52,6 @@ static UIView *crosshairContainer = nil;
     return YES;
 }
 
-// Tự động căn lại vị trí tâm ngắm và menu khi màn hình chuyển đổi giữa dọc và ngang
 - (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
     [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
     [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
@@ -106,6 +103,10 @@ static UIVisualEffectView *menuBlurView = nil;
 static UIView *menuBorderOverlay = nil;
 static UIView *menuDashboardBar = nil;
 static UILabel *hudInfoLabel = nil;
+
+// Khung nhập PIN Admin trực tiếp trong menu để bàn phím luôn hiện
+static UIView *pinPromptContainer = nil;
+static UITextField *pinInputField = nil;
 
 static NSMutableArray<BaconWebTab *> *webTabsList = nil;
 static NSInteger nextTabId = 1;
@@ -217,6 +218,7 @@ static long currentAppRamMB = 0;
     }
 }
 
+// Đo Ping độc lập qua cấu hình riêng, không ảnh hưởng kết nối của game
 + (void)measureNetworkPing {
     static BOOL isMeasuring = NO;
     if (isMeasuring) return;
@@ -785,6 +787,7 @@ static long currentAppRamMB = 0;
         [self updateDashboardHUD];
     }
 
+    // Chỉ đo ping khi Menu đang mở, ngắt mạng khi menu đóng để bảo vệ socket lúc đổi server
     if (menuContainer && !menuContainer.hidden) {
         if (link.timestamp - lastPingCheckTime >= 5.0) {
             lastPingCheckTime = link.timestamp;
@@ -1046,19 +1049,28 @@ static long currentAppRamMB = 0;
     keyActionContainer.backgroundColor = [UIColor clearColor];
     keyActionContainer.hidden = YES;
 
-    UIButton *saveKeyBtn = [self createGlassButtonWithFrame:CGRectMake(0, 0, 72, 30) title:@"💾 Lưu" color:[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0]];
+    // Nút Lưu Key
+    UIButton *saveKeyBtn = [self createGlassButtonWithFrame:CGRectMake(0, 0, 58, 30) title:@"💾 Lưu" color:[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0]];
     [saveKeyBtn addTarget:self action:@selector(onConfirmSaveKey) forControlEvents:UIControlEventTouchUpInside];
     [keyActionContainer addSubview:saveKeyBtn];
 
-    viewDevicesBtn = [self createGlassButtonWithFrame:CGRectMake(78, 0, 90, 30) title:@"👥 Thiết Bị" color:[UIColor colorWithRed:0.7 green:0.3 blue:0.9 alpha:1.0]];
+    // Nút Check Quota API mới
+    UIButton *checkKeyBtn = [self createGlassButtonWithFrame:CGRectMake(62, 0, 64, 30) title:@"📊 Quota" color:[UIColor colorWithRed:0.2 green:0.7 blue:1.0 alpha:1.0]];
+    [checkKeyBtn addTarget:self action:@selector(handleCheckKeyQuota) forControlEvents:UIControlEventTouchUpInside];
+    [keyActionContainer addSubview:checkKeyBtn];
+
+    // Nút Xem Thiết Bị
+    viewDevicesBtn = [self createGlassButtonWithFrame:CGRectMake(130, 0, 76, 30) title:@"👥 Thiết Bị" color:[UIColor colorWithRed:0.7 green:0.3 blue:0.9 alpha:1.0]];
     [viewDevicesBtn addTarget:self action:@selector(toggleDeviceLogs) forControlEvents:UIControlEventTouchUpInside];
     [keyActionContainer addSubview:viewDevicesBtn];
 
-    killswitchBtn = [self createGlassButtonWithFrame:CGRectMake(174, 0, 76, 30) title:@"🚨 Khóa" color:[UIColor colorWithRed:1.0 green:0.4 blue:0.2 alpha:1.0]];
+    // Nút Khóa dylib từ xa
+    killswitchBtn = [self createGlassButtonWithFrame:CGRectMake(210, 0, 60, 30) title:@"🚨 Khóa" color:[UIColor colorWithRed:1.0 green:0.4 blue:0.2 alpha:1.0]];
     [killswitchBtn addTarget:self action:@selector(handleToggleKillswitchRemote) forControlEvents:UIControlEventTouchUpInside];
     [keyActionContainer addSubview:killswitchBtn];
 
-    UIButton *discardKeyBtn = [self createGlassButtonWithFrame:CGRectMake(256, 0, keyActionContainer.bounds.size.width - 256, 30) title:@"✕" color:[UIColor colorWithWhite:0.6 alpha:1.0]];
+    // Nút Hủy
+    UIButton *discardKeyBtn = [self createGlassButtonWithFrame:CGRectMake(274, 0, 34, 30) title:@"✕" color:[UIColor colorWithWhite:0.6 alpha:1.0]];
     [discardKeyBtn addTarget:self action:@selector(onDiscardKey) forControlEvents:UIControlEventTouchUpInside];
     [keyActionContainer addSubview:discardKeyBtn];
     [bypassTabContainer addSubview:keyActionContainer];
@@ -1162,6 +1174,52 @@ static long currentAppRamMB = 0;
     utilsResultDisplay.selectable = YES;
     [uResultBox addSubview:utilsResultDisplay];
 
+    // ==========================================
+    // KHUNG NHẬP PIN ADMIN TÍCH HỢP (HIỆN BÀN PHÍM 100%)
+    // ==========================================
+    pinPromptContainer = [[UIView alloc] initWithFrame:menuContainer.bounds];
+    pinPromptContainer.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.98];
+    pinPromptContainer.layer.cornerRadius = 24.0;
+    pinPromptContainer.clipsToBounds = YES;
+    pinPromptContainer.hidden = YES;
+
+    UILabel *pinTitle = [[UILabel alloc] initWithFrame:CGRectMake(16, 16, menuWidth - 32, 22)];
+    pinTitle.text = @"🔐 QUYỀN QUẢN TRỊ VIÊN";
+    pinTitle.textColor = [UIColor colorWithRed:1.00 green:0.85 blue:0.20 alpha:1.0];
+    pinTitle.font = [UIFont boldSystemFontOfSize:14];
+    pinTitle.textAlignment = NSTextAlignmentCenter;
+    [pinPromptContainer addSubview:pinTitle];
+
+    UILabel *pinSub = [[UILabel alloc] initWithFrame:CGRectMake(16, 42, menuWidth - 32, 20)];
+    pinSub.text = @"Nhập mã PIN để mở khóa bảng điều khiển:";
+    pinSub.textColor = [UIColor colorWithWhite:0.8 alpha:1.0];
+    pinSub.font = [UIFont systemFontOfSize:11];
+    pinSub.textAlignment = NSTextAlignmentCenter;
+    [pinPromptContainer addSubview:pinSub];
+
+    pinInputField = [[UITextField alloc] initWithFrame:CGRectMake(30, 72, menuWidth - 60, 40)];
+    pinInputField.placeholder = @"Nhập mã PIN...";
+    pinInputField.secureTextEntry = YES;
+    pinInputField.keyboardType = UIKeyboardTypeNumberPad;
+    pinInputField.textAlignment = NSTextAlignmentCenter;
+    pinInputField.textColor = [UIColor colorWithRed:1.0 green:0.85 blue:0.3 alpha:1.0];
+    pinInputField.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.4];
+    pinInputField.layer.cornerRadius = 10.0;
+    pinInputField.layer.borderWidth = 1.0;
+    pinInputField.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.2].CGColor;
+    pinInputField.font = [UIFont boldSystemFontOfSize:16];
+    [pinPromptContainer addSubview:pinInputField];
+
+    UIButton *cancelPinBtn = [self createGlassButtonWithFrame:CGRectMake(30, 126, (menuWidth - 70) / 2, 36) title:@"✕ Hủy" color:[UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0]];
+    [cancelPinBtn addTarget:self action:@selector(onCancelPinPrompt) forControlEvents:UIControlEventTouchUpInside];
+    [pinPromptContainer addSubview:cancelPinBtn];
+
+    UIButton *confirmPinBtn = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(cancelPinBtn.frame) + 10, 126, (menuWidth - 70) / 2, 36) title:@"🔓 Mở Khóa" color:[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0]];
+    [confirmPinBtn addTarget:self action:@selector(onConfirmPinPrompt) forControlEvents:UIControlEventTouchUpInside];
+    [pinPromptContainer addSubview:confirmPinBtn];
+
+    [menuContainer addSubview:pinPromptContainer];
+
     [rootV addSubview:menuContainer];
 
     [self setupHistoryOverlayInWindow:targetWindow];
@@ -1236,63 +1294,130 @@ static long currentAppRamMB = 0;
     }
 }
 
+// Bấm 5 lần tiêu đề để mở khóa Admin
 + (void)handleAdminSecretTap {
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
-    
-    // Kích hoạt quyền keyWindow để bàn phím ảo hiển thị
-    [self activateOverlayKeyWindow];
-
-    UIViewController *topVC = baconOverlayWindow.rootViewController;
-    while (topVC.presentedViewController) topVC = topVC.presentedViewController;
-    if (!topVC) return;
-
     if (isAdminMode) {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"🛡️ Quản Trị Viên" message:@"Bạn muốn khóa lại chế độ Quản Trị Viên?" preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"Khóa ngay" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
-            isAdminMode = NO;
-            [self updateLayoutForAdminState:NO];
-            deviceLogsContainer.hidden = YES;
-            [self triggerNotify:UINotificationFeedbackTypeSuccess];
-            resultDisplay.text = @"🔒 Đã khóa chế độ Admin! Chuyển về giao diện Khách.";
-            resultDisplay.textColor = [UIColor colorWithWhite:0.8 alpha:1.0];
-            if (menuContainer.hidden) [self restoreGameKeyWindow];
-        }]];
-        [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
-            if (menuContainer.hidden) [self restoreGameKeyWindow];
-        }]];
-        [topVC presentViewController:alert animated:YES completion:nil];
+        isAdminMode = NO;
+        [self updateLayoutForAdminState:NO];
+        deviceLogsContainer.hidden = YES;
+        [self triggerNotify:UINotificationFeedbackTypeSuccess];
+        resultDisplay.text = @"🔒 Đã khóa chế độ Admin! Chuyển về giao diện Khách.";
+        resultDisplay.textColor = [UIColor colorWithWhite:0.8 alpha:1.0];
         return;
     }
 
-    UIAlertController *pinAlert = [UIAlertController alertControllerWithTitle:@"🔐 Quyền Admin" message:@"Nhập mật mã để mở bảng quản trị:" preferredStyle:UIAlertControllerStyleAlert];
-    [pinAlert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
-        textField.placeholder = @"Nhập mật mã...";
-        textField.secureTextEntry = YES;
-        textField.keyboardType = UIKeyboardTypeNumberPad;
-    }];
+    pinInputField.text = @"";
+    pinInputField.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.2].CGColor;
+    pinPromptContainer.hidden = NO;
+    [menuContainer bringSubviewToFront:pinPromptContainer];
+    [self activateOverlayKeyWindow];
+    [pinInputField becomeFirstResponder];
+}
 
-    [pinAlert addAction:[UIAlertAction actionWithTitle:@"Mở khóa" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        NSString *enteredPIN = pinAlert.textFields.firstObject.text;
-        if ([enteredPIN isEqualToString:ADMIN_PIN]) {
-            isAdminMode = YES;
-            [self updateLayoutForAdminState:YES];
-            [self triggerNotify:UINotificationFeedbackTypeSuccess];
-            resultDisplay.text = @"👑 Xin chào Admin! Bạn có thể xem/đổi API Key hoặc kiểm tra người dùng.";
-            resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
-        } else {
-            [self triggerNotify:UINotificationFeedbackTypeError];
-            resultDisplay.text = @"❌ Mật mã không đúng!";
-            resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
-        }
-        if (menuContainer.hidden) [self restoreGameKeyWindow];
-    }]];
-    [pinAlert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
-        if (menuContainer.hidden) [self restoreGameKeyWindow];
-    }]];
++ (void)onConfirmPinPrompt {
+    NSString *enteredPIN = pinInputField.text;
+    if ([enteredPIN isEqualToString:ADMIN_PIN]) {
+        [pinInputField resignFirstResponder];
+        pinPromptContainer.hidden = YES;
+        isAdminMode = YES;
+        [self updateLayoutForAdminState:YES];
+        [self triggerNotify:UINotificationFeedbackTypeSuccess];
+        resultDisplay.text = @"👑 Xin chào Admin! Bạn có thể xem/đổi API Key, kiểm tra Quota hoặc người dùng.";
+        resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
+    } else {
+        [self triggerNotify:UINotificationFeedbackTypeError];
+        pinInputField.layer.borderColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0].CGColor;
+        pinInputField.text = @"";
+        resultDisplay.text = @"❌ Mật mã không đúng!";
+        resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
+    }
+}
 
-    [topVC presentViewController:pinAlert animated:YES completion:^{
-        [pinAlert.textFields.firstObject becomeFirstResponder];
-    }];
++ (void)onCancelPinPrompt {
+    [pinInputField resignFirstResponder];
+    pinPromptContainer.hidden = YES;
+}
+
+// Kiểm tra số lượng request còn lại qua API mới
++ (void)handleCheckKeyQuota {
+    [self triggerImpact:UIImpactFeedbackStyleLight];
+    [apiKeyInput resignFirstResponder];
+    [linkInput resignFirstResponder];
+
+    NSString *key = [self cleanString:apiKeyInput.text];
+    if (key.length == 0) {
+        NSString *savedKey = [[NSUserDefaults standardUserDefaults] stringForKey:STORAGE_KEY];
+        key = (savedKey && savedKey.length > 0) ? savedKey : DEFAULT_API_KEY;
+    }
+
+    resultDisplay.text = @"⏳ Đang kiểm tra số lượng request còn lại...";
+    resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.8 blue:0.2 alpha:1.0];
+
+    NSString *encodedKey = [key stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
+    NSString *urlString = [NSString stringWithFormat:@"https://api.baconbypass.xyz/check-expired?key=%@", encodedKey];
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (!url) {
+        resultDisplay.text = @"❌ URL kiểm tra không hợp lệ!";
+        resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
+        return;
+    }
+
+    NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    cfg.timeoutIntervalForRequest = 10.0;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:cfg];
+
+    [[session dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (err || !data) {
+                [self triggerNotify:UINotificationFeedbackTypeError];
+                resultDisplay.text = @"❌ Mất kết nối đến API BaconBypass!";
+                resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
+                return;
+            }
+            NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            if (!json) {
+                [self triggerNotify:UINotificationFeedbackTypeError];
+                resultDisplay.text = @"❌ Dữ liệu phản hồi không hợp lệ!";
+                resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
+                return;
+            }
+            NSString *status = json[@"status"];
+            if ([status isEqualToString:@"success"]) {
+                [self triggerNotify:UINotificationFeedbackTypeSuccess];
+                NSString *timeVal = [NSString stringWithFormat:@"%@", json[@"time"] ?: @"-"];
+                if ([timeVal isEqualToString:@"i"]) {
+                    timeVal = @"Vô hạn";
+                }
+                id remVal = json[@"remaining"];
+                id limitVal = json[@"limitRequest"];
+                id usedVal = json[@"usedRequests"];
+
+                NSMutableString *info = [NSMutableString stringWithString:@"📊 THÔNG TIN API KEY:\n"];
+                if (remVal) {
+                    [info appendFormat:@"• Còn lại: %@ req | ", remVal];
+                } else if (limitVal && usedVal) {
+                    NSInteger r = [limitVal integerValue] - [usedVal integerValue];
+                    [info appendFormat:@"• Còn lại: %ld req | ", (long)r];
+                }
+                if (usedVal && limitVal) {
+                    [info appendFormat:@"Đã dùng: %@/%@\n", usedVal, limitVal];
+                } else if (usedVal) {
+                    [info appendFormat:@"Đã dùng: %@ req\n", usedVal];
+                }
+                [info appendFormat:@"• Thời hạn: %@", timeVal];
+
+                resultDisplay.text = info;
+                resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
+            } else {
+                [self triggerNotify:UINotificationFeedbackTypeError];
+                NSString *msg = json[@"message"] ?: @"Key không hợp lệ hoặc đã hết hạn!";
+                resultDisplay.text = [NSString stringWithFormat:@"❌ Lỗi: %@", msg];
+                resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
+            }
+        });
+        [session finishTasksAndInvalidate];
+    }] resume];
 }
 
 + (void)handleToggleKillswitchRemote {
@@ -1618,7 +1743,7 @@ static long currentAppRamMB = 0;
 
 + (void)openMenu {
     [self triggerImpact:UIImpactFeedbackStyleMedium];
-    [self activateOverlayKeyWindow]; // Cho phép bàn phím xuất hiện khi bấm vào textfield
+    [self activateOverlayKeyWindow]; // Kích hoạt quyền keyWindow để bàn phím hiện khi nhập liệu
     menuContainer.hidden = NO;
     floatingCircleBtn.hidden = YES;
     [baconOverlayWindow.rootViewController.view bringSubviewToFront:menuContainer];
@@ -1629,7 +1754,9 @@ static long currentAppRamMB = 0;
     [self triggerImpact:UIImpactFeedbackStyleLight];
     [linkInput resignFirstResponder];
     [apiKeyInput resignFirstResponder];
-    [self restoreGameKeyWindow]; // Trả lại quyền cho Roblox để đổi server không bị văng
+    [pinInputField resignFirstResponder];
+    pinPromptContainer.hidden = YES;
+    [self restoreGameKeyWindow]; // Trả lại keyWindow cho Roblox để khi chơi/đổi server không bị văng
     menuContainer.hidden = YES;
     historyContainer.hidden = YES;
     deviceLogsContainer.hidden = YES;
@@ -1670,6 +1797,7 @@ static long currentAppRamMB = 0;
     resultDisplay.textColor = [UIColor colorWithRed:0.8 green:0.8 blue:0.8 alpha:1.0];
 }
 
+// Bypass qua endpoint chính thức api.baconbypass.xyz
 + (void)handleBypass {
     [self triggerImpact:UIImpactFeedbackStyleMedium];
     [linkInput resignFirstResponder];
@@ -1699,7 +1827,7 @@ static long currentAppRamMB = 0;
     resultDisplay.text = @"⏳ Đang gửi request tới Bacon API...";
     resultDisplay.textColor = [UIColor colorWithRed:1.00 green:0.67 blue:0.00 alpha:1.0];
 
-    NSURL *endpoint = [NSURL URLWithString:@"https://baconbypass.online/bypass"];
+    NSURL *endpoint = [NSURL URLWithString:@"https://api.baconbypass.xyz/bypass"];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:endpoint];
     req.HTTPMethod = @"POST";
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
