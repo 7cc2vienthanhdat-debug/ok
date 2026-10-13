@@ -10,7 +10,7 @@
 #include <stdlib.h>
 
 // ============================================================
-// 1. CỬA SỔ OVERLAY ĐỘC LẬP (QUẢN LÝ KEYWINDOW ĐỘNG)
+// 1. CỬA SỔ OVERLAY ĐỘC LẬP (TỰ ĐỘNG XOAY TỰ NHIÊN THEO MỌI HƯỚNG)
 // ============================================================
 static BOOL g_overlayCanBeKey = NO;
 
@@ -43,9 +43,9 @@ static UIView *crosshairContainer = nil;
     return YES;
 }
 
-// Cho phép cả màn hình dọc (ở sảnh) và màn hình ngang (khi vào phòng chơi)
+// Hỗ trợ tự do mọi hướng để game và iOS tự động xoay, không can thiệp hay ép hướng
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return UIInterfaceOrientationMaskAllButUpsideDown;
+    return UIInterfaceOrientationMaskAll;
 }
 
 - (BOOL)prefersStatusBarHidden {
@@ -104,7 +104,6 @@ static UIView *menuBorderOverlay = nil;
 static UIView *menuDashboardBar = nil;
 static UILabel *hudInfoLabel = nil;
 
-// Khung nhập PIN Admin trực tiếp trong menu để bàn phím luôn hiện
 static UIView *pinPromptContainer = nil;
 static UITextField *pinInputField = nil;
 
@@ -157,6 +156,25 @@ static NSInteger currentPingMs = 0;
 static CFTimeInterval lastPingCheckTime = 0;
 static long currentAppRamMB = 0;
 
++ (UIWindow *)findRobloxMainWindow {
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
+            UIWindowScene *windowScene = (UIWindowScene *)scene;
+            for (UIWindow *win in windowScene.windows) {
+                if (win != baconOverlayWindow && !win.hidden && win.windowLevel == UIWindowLevelNormal && win.rootViewController != nil) {
+                    return win;
+                }
+            }
+        }
+    }
+    for (UIWindow *win in [UIApplication sharedApplication].windows) {
+        if (win != baconOverlayWindow && !win.hidden && win.windowLevel == UIWindowLevelNormal && win.rootViewController != nil) {
+            return win;
+        }
+    }
+    return nil;
+}
+
 + (void)activateOverlayKeyWindow {
     g_overlayCanBeKey = YES;
     [baconOverlayWindow makeKeyWindow];
@@ -164,22 +182,9 @@ static long currentAppRamMB = 0;
 
 + (void)restoreGameKeyWindow {
     g_overlayCanBeKey = NO;
-    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if ([scene isKindOfClass:[UIWindowScene class]]) {
-            UIWindowScene *ws = (UIWindowScene *)scene;
-            for (UIWindow *w in ws.windows) {
-                if (w != baconOverlayWindow && !w.hidden && w.rootViewController) {
-                    [w makeKeyWindow];
-                    return;
-                }
-            }
-        }
-    }
-    for (UIWindow *w in [UIApplication sharedApplication].windows) {
-        if (w != baconOverlayWindow && !w.hidden && w.rootViewController) {
-            [w makeKeyWindow];
-            return;
-        }
+    UIWindow *mainWin = [self findRobloxMainWindow];
+    if (mainWin) {
+        [mainWin makeKeyWindow];
     }
 }
 
@@ -218,7 +223,6 @@ static long currentAppRamMB = 0;
     }
 }
 
-// Đo Ping độc lập qua cấu hình riêng, không ảnh hưởng kết nối của game
 + (void)measureNetworkPing {
     static BOOL isMeasuring = NO;
     if (isMeasuring) return;
@@ -727,7 +731,8 @@ static long currentAppRamMB = 0;
         baconOverlayWindow = [[BaconPassthroughWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     }
 
-    baconOverlayWindow.windowLevel = UIWindowLevelStatusBar + 50.0;
+    // Đặt ở mức UIWindowLevelNormal + 1.0 (trên game nhưng dưới Bàn phím & Console để triệt tiêu lỗi crash)
+    baconOverlayWindow.windowLevel = UIWindowLevelNormal + 1.0;
     baconOverlayWindow.backgroundColor = [UIColor clearColor];
     baconOverlayWindow.rootViewController = [[BaconOverlayViewController alloc] init];
     baconOverlayWindow.hidden = NO;
@@ -1043,33 +1048,29 @@ static long currentAppRamMB = 0;
     apiKeyInput.hidden = YES;
     [apiKeyInput addTarget:self action:@selector(onApiKeyEditingChanged) forControlEvents:UIControlEventEditingChanged];
     [apiKeyInput addTarget:self action:@selector(onApiKeyEditingBegan) forControlEvents:UIControlEventEditingDidBegin];
+    [apiKeyInput addTarget:self action:@selector(onFieldEditingEnded) forControlEvents:UIControlEventEditingDidEnd];
     [bypassTabContainer addSubview:apiKeyInput];
 
     keyActionContainer = [[UIView alloc] initWithFrame:CGRectMake(16, 44, menuWidth - 32, 30)];
     keyActionContainer.backgroundColor = [UIColor clearColor];
     keyActionContainer.hidden = YES;
 
-    // Nút Lưu Key
     UIButton *saveKeyBtn = [self createGlassButtonWithFrame:CGRectMake(0, 0, 58, 30) title:@"💾 Lưu" color:[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0]];
     [saveKeyBtn addTarget:self action:@selector(onConfirmSaveKey) forControlEvents:UIControlEventTouchUpInside];
     [keyActionContainer addSubview:saveKeyBtn];
 
-    // Nút Check Quota API mới
     UIButton *checkKeyBtn = [self createGlassButtonWithFrame:CGRectMake(62, 0, 64, 30) title:@"📊 Quota" color:[UIColor colorWithRed:0.2 green:0.7 blue:1.0 alpha:1.0]];
     [checkKeyBtn addTarget:self action:@selector(handleCheckKeyQuota) forControlEvents:UIControlEventTouchUpInside];
     [keyActionContainer addSubview:checkKeyBtn];
 
-    // Nút Xem Thiết Bị
     viewDevicesBtn = [self createGlassButtonWithFrame:CGRectMake(130, 0, 76, 30) title:@"👥 Thiết Bị" color:[UIColor colorWithRed:0.7 green:0.3 blue:0.9 alpha:1.0]];
     [viewDevicesBtn addTarget:self action:@selector(toggleDeviceLogs) forControlEvents:UIControlEventTouchUpInside];
     [keyActionContainer addSubview:viewDevicesBtn];
 
-    // Nút Khóa dylib từ xa
     killswitchBtn = [self createGlassButtonWithFrame:CGRectMake(210, 0, 60, 30) title:@"🚨 Khóa" color:[UIColor colorWithRed:1.0 green:0.4 blue:0.2 alpha:1.0]];
     [killswitchBtn addTarget:self action:@selector(handleToggleKillswitchRemote) forControlEvents:UIControlEventTouchUpInside];
     [keyActionContainer addSubview:killswitchBtn];
 
-    // Nút Hủy
     UIButton *discardKeyBtn = [self createGlassButtonWithFrame:CGRectMake(274, 0, 34, 30) title:@"✕" color:[UIColor colorWithWhite:0.6 alpha:1.0]];
     [discardKeyBtn addTarget:self action:@selector(onDiscardKey) forControlEvents:UIControlEventTouchUpInside];
     [keyActionContainer addSubview:discardKeyBtn];
@@ -1085,6 +1086,8 @@ static long currentAppRamMB = 0;
     linkInput.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.15].CGColor;
     linkInput.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 14, 40)];
     linkInput.leftViewMode = UITextFieldViewModeAlways;
+    [linkInput addTarget:self action:@selector(onFieldEditingBegan) forControlEvents:UIControlEventEditingDidBegin];
+    [linkInput addTarget:self action:@selector(onFieldEditingEnded) forControlEvents:UIControlEventEditingDidEnd];
     [bypassTabContainer addSubview:linkInput];
 
     bypassBtn = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -1175,7 +1178,7 @@ static long currentAppRamMB = 0;
     [uResultBox addSubview:utilsResultDisplay];
 
     // ==========================================
-    // KHUNG NHẬP PIN ADMIN TÍCH HỢP (HIỆN BÀN PHÍM 100%)
+    // KHUNG NHẬP PIN ADMIN TÍCH HỢP
     // ==========================================
     pinPromptContainer = [[UIView alloc] initWithFrame:menuContainer.bounds];
     pinPromptContainer.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.98];
@@ -1208,6 +1211,8 @@ static long currentAppRamMB = 0;
     pinInputField.layer.borderWidth = 1.0;
     pinInputField.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.2].CGColor;
     pinInputField.font = [UIFont boldSystemFontOfSize:16];
+    [pinInputField addTarget:self action:@selector(onFieldEditingBegan) forControlEvents:UIControlEventEditingDidBegin];
+    [pinInputField addTarget:self action:@selector(onFieldEditingEnded) forControlEvents:UIControlEventEditingDidEnd];
     [pinPromptContainer addSubview:pinInputField];
 
     UIButton *cancelPinBtn = [self createGlassButtonWithFrame:CGRectMake(30, 126, (menuWidth - 70) / 2, 36) title:@"✕ Hủy" color:[UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0]];
@@ -1294,7 +1299,6 @@ static long currentAppRamMB = 0;
     }
 }
 
-// Bấm 5 lần tiêu đề để mở khóa Admin
 + (void)handleAdminSecretTap {
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
     if (isAdminMode) {
@@ -1325,6 +1329,7 @@ static long currentAppRamMB = 0;
         [self triggerNotify:UINotificationFeedbackTypeSuccess];
         resultDisplay.text = @"👑 Xin chào Admin! Bạn có thể xem/đổi API Key, kiểm tra Quota hoặc người dùng.";
         resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
+        [self restoreGameKeyWindow];
     } else {
         [self triggerNotify:UINotificationFeedbackTypeError];
         pinInputField.layer.borderColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0].CGColor;
@@ -1337,9 +1342,17 @@ static long currentAppRamMB = 0;
 + (void)onCancelPinPrompt {
     [pinInputField resignFirstResponder];
     pinPromptContainer.hidden = YES;
+    [self restoreGameKeyWindow];
 }
 
-// Kiểm tra số lượng request còn lại qua API mới
++ (void)onFieldEditingBegan {
+    [self activateOverlayKeyWindow];
+}
+
++ (void)onFieldEditingEnded {
+    [self restoreGameKeyWindow];
+}
+
 + (void)handleCheckKeyQuota {
     [self triggerImpact:UIImpactFeedbackStyleLight];
     [apiKeyInput resignFirstResponder];
@@ -1597,10 +1610,10 @@ static long currentAppRamMB = 0;
     [alert addAction:[UIAlertAction actionWithTitle:@"Lưu" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         NSString *name = alert.textFields.firstObject.text;
         [self sendSaveNicknameToServer:devID nickname:name];
-        if (menuContainer.hidden) [self restoreGameKeyWindow];
+        [self restoreGameKeyWindow];
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
-        if (menuContainer.hidden) [self restoreGameKeyWindow];
+        [self restoreGameKeyWindow];
     }]];
 
     [topVC presentViewController:alert animated:YES completion:^{
@@ -1743,7 +1756,7 @@ static long currentAppRamMB = 0;
 
 + (void)openMenu {
     [self triggerImpact:UIImpactFeedbackStyleMedium];
-    [self activateOverlayKeyWindow]; // Kích hoạt quyền keyWindow để bàn phím hiện khi nhập liệu
+    [self activateOverlayKeyWindow];
     menuContainer.hidden = NO;
     floatingCircleBtn.hidden = YES;
     [baconOverlayWindow.rootViewController.view bringSubviewToFront:menuContainer];
@@ -1756,7 +1769,7 @@ static long currentAppRamMB = 0;
     [apiKeyInput resignFirstResponder];
     [pinInputField resignFirstResponder];
     pinPromptContainer.hidden = YES;
-    [self restoreGameKeyWindow]; // Trả lại keyWindow cho Roblox để khi chơi/đổi server không bị văng
+    [self restoreGameKeyWindow];
     menuContainer.hidden = YES;
     historyContainer.hidden = YES;
     deviceLogsContainer.hidden = YES;
@@ -1772,12 +1785,16 @@ static long currentAppRamMB = 0;
     return cleaned;
 }
 
-+ (void)onApiKeyEditingBegan { keyActionContainer.hidden = NO; }
++ (void)onApiKeyEditingBegan { 
+    keyActionContainer.hidden = NO; 
+    [self onFieldEditingBegan];
+}
 + (void)onApiKeyEditingChanged { keyActionContainer.hidden = NO; }
 
 + (void)onConfirmSaveKey {
     [self triggerNotify:UINotificationFeedbackTypeSuccess];
     [apiKeyInput resignFirstResponder];
+    [self restoreGameKeyWindow];
     NSString *newKey = [self cleanString:apiKeyInput.text];
     if (newKey.length > 0) {
         [[NSUserDefaults standardUserDefaults] setObject:newKey forKey:STORAGE_KEY];
@@ -1790,6 +1807,7 @@ static long currentAppRamMB = 0;
 + (void)onDiscardKey {
     [self triggerImpact:UIImpactFeedbackStyleLight];
     [apiKeyInput resignFirstResponder];
+    [self restoreGameKeyWindow];
     NSString *savedKey = [[NSUserDefaults standardUserDefaults] stringForKey:STORAGE_KEY];
     if (!savedKey || savedKey.length == 0) savedKey = DEFAULT_API_KEY;
     apiKeyInput.text = savedKey;
@@ -1797,11 +1815,11 @@ static long currentAppRamMB = 0;
     resultDisplay.textColor = [UIColor colorWithRed:0.8 green:0.8 blue:0.8 alpha:1.0];
 }
 
-// Bypass qua endpoint chính thức api.baconbypass.xyz
 + (void)handleBypass {
     [self triggerImpact:UIImpactFeedbackStyleMedium];
     [linkInput resignFirstResponder];
     [apiKeyInput resignFirstResponder];
+    [self restoreGameKeyWindow];
 
     if (isServerKillswitchActive && !isAdminMode) {
         [self triggerNotify:UINotificationFeedbackTypeError];
