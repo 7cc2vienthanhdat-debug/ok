@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Compile BaconBypass Dylib
         run: |
@@ -36,15 +38,13 @@ jobs:
             BaconBypass.m \
             -o libBaconBypass.dylib
 
-      - name: Push libBaconBypass.dylib directly to Repo
+      - name: Push Dylib to Repo & Create Direct Download Link
         run: |
           git config --local user.email "actions@github.com"
           git config --local user.name "GitHub Actions"
-          git add libBaconBypass.dylib
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update compiled libBaconBypass.dylib" && git push)
+          git add -f libBaconBypass.dylib
+          git commit -m "Update compiled libBaconBypass.dylib [skip ci]" || echo "No changes to commit"
+          git push origin main
 
-      - name: Upload Artifact (Backup)
-        uses: actions/upload-artifact@v4
-        with:
-          name: libBaconBypass
-          path: libBaconBypass.dylib
+          echo "### ✅ Biên dịch thành công!" >> $GITHUB_STEP_SUMMARY
+          echo "👉 **[BẤM VÀO ĐÂY ĐỂ TẢI THẲNG libBaconBypass.dylib (KHÔNG NÉN ZIP)](https://github.com/${{ github.repository }}/raw/main/libBaconBypass.dylib)**" >> $GITHUB_STEP_SUMMARY
