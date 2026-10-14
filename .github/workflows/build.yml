@@ -2,17 +2,23 @@ name: Build iOS Dylib
 
 on:
   push:
-    branches: [ main ]
+    branches: [ "main" ]
+    paths-ignore:
+      - 'libBaconBypass.dylib'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: macos-latest
+
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Compile Objective-C to iOS arm64 Dylib
+      - name: Compile BaconBypass Dylib
         run: |
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
           clang -dynamiclib \
@@ -30,7 +36,14 @@ jobs:
             BaconBypass.m \
             -o libBaconBypass.dylib
 
-      - name: Upload Dylib Artifact
+      - name: Push libBaconBypass.dylib directly to Repo
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Actions"
+          git add libBaconBypass.dylib
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update compiled libBaconBypass.dylib" && git push)
+
+      - name: Upload Artifact (Backup)
         uses: actions/upload-artifact@v4
         with:
           name: libBaconBypass
