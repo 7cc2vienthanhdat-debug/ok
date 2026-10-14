@@ -10,57 +10,7 @@
 #include <stdlib.h>
 
 // ============================================================
-// 1. LỚP VIEW TRONG SUỐT GẮN TRỰC TIẾP VÀO CỬA SỔ GAME
-// (Không tạo UIWindow phụ -> Chống văng 100% khi mở Console)
-// ============================================================
-static UIView *crosshairContainer = nil;
-static UIButton *floatingCircleBtn = nil;
-static UIView *menuContainer = nil;
-
-@interface BaconPassthroughView : UIView
-@end
-
-@implementation BaconPassthroughView
-
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    UIView *hitView = [super hitTest:point withEvent:event];
-    if (hitView == self) {
-        return nil; // Chạm xuyên thấu xuống game và Console khi bấm ra ngoài menu
-    }
-    return hitView;
-}
-
-- (void)layoutSubviews {
-    [super layoutSubviews];
-    CGSize size = self.bounds.size;
-    if (size.width <= 0 || size.height <= 0) return;
-
-    // Giữ tâm ngắm luôn ở chính giữa màn hình khi xoay dọc/ngang
-    if (crosshairContainer) {
-        crosshairContainer.center = CGPointMake(size.width / 2.0, size.height / 2.0);
-    }
-
-    // Giữ nút tròn nổi không bị văng khỏi mép màn hình khi xoay
-    if (floatingCircleBtn) {
-        CGFloat cx = MIN(MAX(25.0, floatingCircleBtn.center.x), size.width - 25.0);
-        CGFloat cy = MIN(MAX(40.0, floatingCircleBtn.center.y), size.height - 25.0);
-        floatingCircleBtn.center = CGPointMake(cx, cy);
-    }
-
-    // Giữ bảng menu luôn nằm gọn trong màn hình khi xoay
-    if (menuContainer) {
-        CGFloat halfW = menuContainer.bounds.size.width / 2.0;
-        CGFloat halfH = menuContainer.bounds.size.height / 2.0;
-        CGFloat mx = MIN(MAX(halfW + 6.0, menuContainer.center.x), size.width - halfW - 6.0);
-        CGFloat my = MIN(MAX(halfH + 6.0, menuContainer.center.y), size.height - halfH - 6.0);
-        menuContainer.center = CGPointMake(mx, my);
-    }
-}
-
-@end
-
-// ============================================================
-// 2. ĐỐI TƯỢNG QUẢN LÝ TAB WEB BÓNG TRÒN NỔI
+// 1. ĐỐI TƯỢNG QUẢN LÝ TAB WEB BÓNG TRÒN NỔI
 // ============================================================
 @interface BaconWebTab : NSObject
 @property (nonatomic, assign) NSInteger tabId;
@@ -78,10 +28,9 @@ static UIView *menuContainer = nil;
 @end
 
 // ============================================================
-// 3. MAIN CONTROLLER & HỆ THỐNG TIỆN ÍCH BACONBYPASS
+// 2. MAIN CONTROLLER & HỆ THỐNG TIỆN ÍCH BACONBYPASS
 // ============================================================
 @interface BaconBypassOverlay : NSObject <WKNavigationDelegate>
-+ (void)load;
 + (void)autoDetectClipboardLink;
 @end
 
@@ -93,15 +42,17 @@ static UIView *menuContainer = nil;
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 #define HISTORY_KEY @"BaconBypass_HistoryLinks"
 
-static BaconPassthroughView *baconOverlayView = nil;
+static UIButton *floatingCircleBtn = nil;
+static UIView *menuContainer = nil;
 static UIVisualEffectView *menuBlurView = nil;
 static UIView *menuBorderOverlay = nil;
 static UIView *menuDashboardBar = nil;
 static UILabel *hudInfoLabel = nil;
 
-// Khung nhập PIN Admin & Đặt tên máy trực tiếp (không dùng UIAlertController để tránh xung đột)
+// Bàn phím số PIN Admin tích hợp sẵn (Không gọi bàn phím iOS, không dùng secureTextEntry)
 static UIView *pinPromptContainer = nil;
-static UITextField *pinInputField = nil;
+static UILabel *pinDisplayLabel = nil;
+static NSMutableString *enteredPinBuffer = nil;
 
 static UIView *nickPromptContainer = nil;
 static UITextField *nickInputField = nil;
@@ -124,14 +75,15 @@ static UITextField *linkInput = nil;
 static UIButton *bypassBtn = nil;
 static UIButton *copyBtn = nil;
 static UIView *resultBox = nil;
-static UITextView *resultDisplay = nil;
+static UILabel *resultDisplay = nil;
 static UIButton *viewDevicesBtn = nil;
 static UIButton *killswitchBtn = nil;
 static NSString *extractedLink = nil;
 
 // Tab Tiện ích
 static UIView *utilsTabContainer = nil;
-static UITextView *utilsResultDisplay = nil;
+static UILabel *utilsResultDisplay = nil;
+static UIView *crosshairContainer = nil;
 static UIView *afkOverlay = nil;
 
 static UIButton *btnBackground = nil;
@@ -142,34 +94,30 @@ static BOOL isBackgroundRunning = NO;
 static BOOL isGameAudioMuted = NO;
 static NSInteger currentFpsTarget = 60;
 static AVAudioPlayer *silentAudioPlayer = nil;
-static UIBackgroundTaskIdentifier bgTaskIdentifier; 
+static UIBackgroundTaskIdentifier bgTaskIdentifier;
 
 static BOOL isAdminMode = NO;
 static BOOL isServerKillswitchActive = NO;
 
-static CADisplayLink *renderLoop = nil;
-static CGFloat currentHue = 0.0;
-static NSInteger frameCount = 0;
-static CFTimeInterval lastFpsTime = 0;
-static NSInteger currentFPS = 60;
+static NSTimer *hudUpdateTimer = nil;
 static NSInteger currentPingMs = 0;
-static CFTimeInterval lastPingCheckTime = 0;
 static long currentAppRamMB = 0;
 
-+ (UIWindow *)findRobloxMainWindow {
+// Tìm view gốc của game một cách an toàn
++ (UIView *)hostGameView {
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
         if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
-            UIWindowScene *windowScene = (UIWindowScene *)scene;
-            for (UIWindow *win in windowScene.windows) {
-                if (!win.hidden && win.windowLevel == UIWindowLevelNormal && win.rootViewController != nil) {
-                    return win;
+            UIWindowScene *ws = (UIWindowScene *)scene;
+            for (UIWindow *win in ws.windows) {
+                if (!win.hidden && win.rootViewController && win.rootViewController.view) {
+                    return win.rootViewController.view;
                 }
             }
         }
     }
     for (UIWindow *win in [UIApplication sharedApplication].windows) {
-        if (!win.hidden && win.windowLevel == UIWindowLevelNormal && win.rootViewController != nil) {
-            return win;
+        if (!win.hidden && win.rootViewController && win.rootViewController.view) {
+            return win.rootViewController.view;
         }
     }
     return nil;
@@ -180,7 +128,6 @@ static long currentAppRamMB = 0;
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
         [gen prepare];
         [gen impactOccurred];
-        AudioServicesPlaySystemSound(1104);
     });
 }
 
@@ -189,9 +136,6 @@ static long currentAppRamMB = 0;
         UINotificationFeedbackGenerator *gen = [[UINotificationFeedbackGenerator alloc] init];
         [gen prepare];
         [gen notificationOccurred:type];
-        if (type == UINotificationFeedbackTypeSuccess) AudioServicesPlaySystemSound(1001);
-        else if (type == UINotificationFeedbackTypeError) AudioServicesPlaySystemSound(1053);
-        else if (type == UINotificationFeedbackTypeWarning) AudioServicesPlaySystemSound(1057);
     });
 }
 
@@ -236,7 +180,7 @@ static long currentAppRamMB = 0;
 }
 
 // ============================================================
-// FPS LIMITER & MUTE GAME
+// FPS & MUTE GAME
 // ============================================================
 + (void)cycleFPSTarget {
     [self triggerImpact:UIImpactFeedbackStyleMedium];
@@ -244,20 +188,10 @@ static long currentAppRamMB = 0;
     else if (currentFpsTarget == 120) currentFpsTarget = 30;
     else currentFpsTarget = 60;
 
-    [self applyFPSLimit:currentFpsTarget];
     [btnFPSUnlock setTitle:[NSString stringWithFormat:@"⚡ FPS: %ldHz", (long)currentFpsTarget] forState:UIControlStateNormal];
     [self triggerNotify:UINotificationFeedbackTypeSuccess];
-    utilsResultDisplay.text = [NSString stringWithFormat:@"🚀 Đã áp dụng tần số quét: %ld FPS!", (long)currentFpsTarget];
+    utilsResultDisplay.text = [NSString stringWithFormat:@"🚀 Đã đặt mục tiêu tần số quét: %ld FPS!", (long)currentFpsTarget];
     utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
-}
-
-+ (void)applyFPSLimit:(NSInteger)fps {
-    if (!renderLoop) return;
-    if (@available(iOS 15.0, *)) {
-        renderLoop.preferredFrameRateRange = CAFrameRateRangeMake(fps / 2, fps, fps);
-    } else {
-        renderLoop.preferredFramesPerSecond = fps;
-    }
 }
 
 + (void)toggleMuteGameAudio {
@@ -289,7 +223,8 @@ static long currentAppRamMB = 0;
 // TRÌNH DUYỆT ĐA TAB BÓNG TRÒN NỔI
 // ============================================================
 + (void)openNewWebTabWithURL:(NSString *)urlString {
-    if (!baconOverlayView) return;
+    UIView *hostV = [self hostGameView];
+    if (!hostV) return;
     [self triggerImpact:UIImpactFeedbackStyleMedium];
     if (!webTabsList) webTabsList = [NSMutableArray array];
 
@@ -297,9 +232,9 @@ static long currentAppRamMB = 0;
     tab.tabId = nextTabId++;
     tab.isMinimized = NO;
 
-    CGFloat bWidth = MIN(baconOverlayView.bounds.size.width - 24, 360.0);
-    CGFloat bHeight = MIN(baconOverlayView.bounds.size.height - 80, 440.0);
-    tab.windowView = [[UIView alloc] initWithFrame:CGRectMake((baconOverlayView.bounds.size.width - bWidth) / 2, 40, bWidth, bHeight)];
+    CGFloat bWidth = MIN(hostV.bounds.size.width - 24, 360.0);
+    CGFloat bHeight = MIN(hostV.bounds.size.height - 60, 420.0);
+    tab.windowView = [[UIView alloc] initWithFrame:CGRectMake((hostV.bounds.size.width - bWidth) / 2, 30, bWidth, bHeight)];
     tab.windowView.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.98];
     tab.windowView.layer.cornerRadius = 16.0;
     tab.windowView.layer.borderWidth = 1.2;
@@ -402,7 +337,7 @@ static long currentAppRamMB = 0;
     [tab.windowView addSubview:tab.webView];
 
     tab.bubbleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    tab.bubbleBtn.frame = CGRectMake(baconOverlayView.bounds.size.width - 55, 120 + (webTabsList.count * 50), 44, 44);
+    tab.bubbleBtn.frame = CGRectMake(hostV.bounds.size.width - 55, 120 + (webTabsList.count * 50), 44, 44);
     tab.bubbleBtn.layer.cornerRadius = 22.0;
     tab.bubbleBtn.layer.borderWidth = 2.0;
     tab.bubbleBtn.layer.borderColor = tab.themeColor.CGColor;
@@ -422,8 +357,8 @@ static long currentAppRamMB = 0;
     UIPanGestureRecognizer *panBubble = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragBubble:)];
     [tab.bubbleBtn addGestureRecognizer:panBubble];
 
-    [baconOverlayView addSubview:tab.bubbleBtn];
-    [baconOverlayView addSubview:tab.windowView];
+    [hostV addSubview:tab.bubbleBtn];
+    [hostV addSubview:tab.windowView];
     [webTabsList addObject:tab];
 
     [self loadTabURL:tab url:urlString];
@@ -463,7 +398,7 @@ static long currentAppRamMB = 0;
     tab.isMinimized = YES;
     tab.windowView.hidden = YES;
     tab.bubbleBtn.hidden = NO;
-    [baconOverlayView bringSubviewToFront:tab.bubbleBtn];
+    [tab.bubbleBtn.superview bringSubviewToFront:tab.bubbleBtn];
 }
 
 + (void)restoreTabFromBubble:(UIButton *)sender {
@@ -473,7 +408,7 @@ static long currentAppRamMB = 0;
     tab.isMinimized = NO;
     tab.bubbleBtn.hidden = YES;
     tab.windowView.hidden = NO;
-    [baconOverlayView bringSubviewToFront:tab.windowView];
+    [tab.windowView.superview bringSubviewToFront:tab.windowView];
 }
 
 + (void)closeTab:(UIButton *)sender {
@@ -623,7 +558,7 @@ static long currentAppRamMB = 0;
 }
 
 // ============================================================
-// ĐO RAM
+// ĐO RAM & TELEMETRY AN TOÀN LUỒNG CHÍNH
 // ============================================================
 + (long)getAppMemoryUsageMB {
     struct mach_task_basic_info info;
@@ -644,19 +579,21 @@ static long currentAppRamMB = 0;
             @"iPhone10,3" : @"iPhone X", @"iPhone11,2" : @"iPhone XS", @"iPhone11,8" : @"iPhone XR",
             @"iPhone12,1" : @"iPhone 11", @"iPhone12,3" : @"iPhone 11 Pro", @"iPhone12,5" : @"iPhone 11 Pro Max",
             @"iPhone13,2" : @"iPhone 12", @"iPhone13,3" : @"iPhone 12 Pro", @"iPhone14,5" : @"iPhone 13",
-            @"iPhone14,2" : @"iPhone 13 Pro", @"iPhone14,7" : @"iPhone 14", @"iPhone15,2" : @"iPhone 14 Pro",
-            @"iPhone15,4" : @"iPhone 15", @"iPhone16,1" : @"iPhone 15 Pro", @"iPhone17,1" : @"iPhone 16 Pro"
+            @"iPhone14,2" : @"iPhone 13 Pro", @"iPhone14,3" : @"iPhone 13 Pro Max", @"iPhone14,7" : @"iPhone 14",
+            @"iPhone15,2" : @"iPhone 14 Pro", @"iPhone15,4" : @"iPhone 15", @"iPhone16,1" : @"iPhone 15 Pro", @"iPhone17,1" : @"iPhone 16 Pro"
         };
     }
     return modelDict[code] ? modelDict[code] : code;
 }
 
 + (void)sendDeviceTelemetry {
+    // Lấy thông tin UIDevice trên Main Thread để tránh lỗi thread-safety của UIKit
+    NSString *model = [self getDeviceModelName];
+    NSString *iosVer = [[UIDevice currentDevice] systemVersion] ?: @"Unknown";
+    NSString *vendorId = [[[UIDevice currentDevice] identifierForVendor] UUIDString] ?: @"Unknown-UUID";
+
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
         @try {
-            NSString *model = [self getDeviceModelName];
-            NSString *iosVer = [[UIDevice currentDevice] systemVersion];
-            NSString *vendorId = [[[UIDevice currentDevice] identifierForVendor] UUIDString] ?: @"Unknown-UUID";
             NSURL *url = [NSURL URLWithString:TRACKER_API];
             if (!url) return;
 
@@ -686,118 +623,89 @@ static long currentAppRamMB = 0;
 
 + (void)applyKillswitchState {
     if (isServerKillswitchActive && !isAdminMode) {
-        menuContainer.hidden = YES;
-        floatingCircleBtn.hidden = YES;
+        if (menuContainer) menuContainer.hidden = YES;
+        if (floatingCircleBtn) floatingCircleBtn.hidden = YES;
     } else {
-        if (floatingCircleBtn && menuContainer.hidden) floatingCircleBtn.hidden = NO;
+        if (floatingCircleBtn && (!menuContainer || menuContainer.hidden)) {
+            floatingCircleBtn.hidden = NO;
+        }
     }
 }
 
+// ============================================================
+// KHỞI TẠO AN TOÀN SAU KHI APP MỞ XONG (KHÔNG GỌI UIKIT TRONG +LOAD)
+// ============================================================
 + (void)load {
     bgTaskIdentifier = UIBackgroundTaskInvalid;
-    [UIDevice currentDevice].batteryMonitoringEnabled = YES;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self tryInjectOverlay];
-        [self sendDeviceTelemetry];
-    });
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
+        [UIDevice currentDevice].batteryMonitoringEnabled = YES;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self tryInjectFloatingButton];
+            [self sendDeviceTelemetry];
+        });
+    }];
 }
 
-+ (void)tryInjectOverlay {
-    if (baconOverlayView != nil) return;
+// Chỉ gắn duy nhất nút tròn nổi lúc vào game, không tạo menu ẩn hay vòng lặp ngầm
++ (void)tryInjectFloatingButton {
+    if (floatingCircleBtn != nil) return;
 
-    UIWindow *mainWin = [self findRobloxMainWindow];
-    if (!mainWin || !mainWin.rootViewController || !mainWin.rootViewController.view) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [self tryInjectOverlay];
+    UIView *hostView = [self hostGameView];
+    if (!hostView) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self tryInjectFloatingButton];
         });
         return;
     }
 
-    UIView *hostView = mainWin.rootViewController.view;
-    baconOverlayView = [[BaconPassthroughView alloc] initWithFrame:hostView.bounds];
-    baconOverlayView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    baconOverlayView.backgroundColor = [UIColor clearColor];
-    [hostView addSubview:baconOverlayView];
+    floatingCircleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    floatingCircleBtn.frame = CGRectMake(25, 120, 42, 42);
+    floatingCircleBtn.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.92];
+    floatingCircleBtn.layer.cornerRadius = 21.0;
+    floatingCircleBtn.layer.borderWidth = 2.0;
+    floatingCircleBtn.layer.borderColor = [UIColor colorWithRed:1.0 green:0.82 blue:0.15 alpha:1.0].CGColor;
+    floatingCircleBtn.clipsToBounds = YES;
 
-    [self setupViewsInContainer:baconOverlayView];
-    [self startDisplayLoop];
+    UILabel *iconLbl = [[UILabel alloc] initWithFrame:floatingCircleBtn.bounds];
+    iconLbl.text = @"⚡";
+    iconLbl.font = [UIFont systemFontOfSize:18];
+    iconLbl.textAlignment = NSTextAlignmentCenter;
+    [floatingCircleBtn addSubview:iconLbl];
+
+    [floatingCircleBtn addTarget:self action:@selector(openMenu) forControlEvents:UIControlEventTouchUpInside];
+    UIPanGestureRecognizer *panBtn = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragCircle:)];
+    [floatingCircleBtn addGestureRecognizer:panBtn];
+
+    NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
+    CGFloat savedCircleX = [defs floatForKey:@"BaconBypass_CirclePosX"];
+    CGFloat savedCircleY = [defs floatForKey:@"BaconBypass_CirclePosY"];
+    if (savedCircleX > 0 && savedCircleY > 0) {
+        CGFloat cx = MIN(MAX(25.0, savedCircleX), hostView.bounds.size.width - 25.0);
+        CGFloat cy = MIN(MAX(40.0, savedCircleY), hostView.bounds.size.height - 25.0);
+        floatingCircleBtn.center = CGPointMake(cx, cy);
+    }
+
+    [hostView addSubview:floatingCircleBtn];
 }
 
-// ============================================================
-// VÒNG LẶP RENDER & CẬP NHẬT HUD
-// ============================================================
-+ (void)startDisplayLoop {
-    if (renderLoop) return;
-    renderLoop = [CADisplayLink displayLinkWithTarget:self selector:@selector(onRenderFrame:)];
-    [renderLoop addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-    [self applyFPSLimit:currentFpsTarget];
-
-    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-        if (renderLoop) renderLoop.paused = YES;
-        if (isBackgroundRunning && silentAudioPlayer) [silentAudioPlayer play];
-    }];
-
-    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillEnterForegroundNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-        if (renderLoop) renderLoop.paused = NO;
-    }];
-
-    [[NSNotificationCenter defaultCenter] addObserverForName:AVAudioSessionInterruptionNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-        if (isBackgroundRunning && silentAudioPlayer) {
-            NSNumber *type = note.userInfo[AVAudioSessionInterruptionTypeKey];
-            if (type.unsignedIntegerValue == AVAudioSessionInterruptionTypeEnded) {
-                NSError *err = nil;
-                [[AVAudioSession sharedInstance] setActive:YES error:&err];
-                [silentAudioPlayer play];
-            }
-        }
-    }];
++ (void)startHudTimer {
+    if (hudUpdateTimer) [hudUpdateTimer invalidate];
+    hudUpdateTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 target:self selector:@selector(onHudTimerTick) userInfo:nil repeats:YES];
+    [self onHudTimerTick];
 }
 
-+ (void)onRenderFrame:(CADisplayLink *)link {
-    currentHue += 0.005;
-    if (currentHue > 1.0) currentHue = 0.0;
-    UIColor *rainbowColor = [UIColor colorWithHue:currentHue saturation:0.95 brightness:1.0 alpha:1.0];
-
-    if (floatingCircleBtn && !floatingCircleBtn.hidden) {
-        floatingCircleBtn.layer.borderColor = rainbowColor.CGColor;
++ (void)stopHudTimer {
+    if (hudUpdateTimer) {
+        [hudUpdateTimer invalidate];
+        hudUpdateTimer = nil;
     }
-    if (menuContainer && !menuContainer.hidden) {
-        if (menuBorderOverlay) menuBorderOverlay.layer.borderColor = [rainbowColor colorWithAlphaComponent:0.7].CGColor;
-    }
+}
 
-    frameCount++;
-    if (lastFpsTime == 0) lastFpsTime = link.timestamp;
-    CFTimeInterval delta = link.timestamp - lastFpsTime;
-
-    if (delta >= 1.0) {
-        currentFPS = (NSInteger)round(frameCount / delta);
-        frameCount = 0;
-        lastFpsTime = link.timestamp;
-
-        // Đảm bảo overlay luôn nằm trên bề mặt view của game
-        UIWindow *mainWin = [self findRobloxMainWindow];
-        if (mainWin && mainWin.rootViewController && mainWin.rootViewController.view && baconOverlayView) {
-            UIView *hostView = mainWin.rootViewController.view;
-            if (baconOverlayView.superview != hostView) {
-                baconOverlayView.frame = hostView.bounds;
-                [hostView addSubview:baconOverlayView];
-            } else if (hostView.subviews.lastObject != baconOverlayView) {
-                [hostView bringSubviewToFront:baconOverlayView];
-            }
-        }
-
-        if (menuContainer && !menuContainer.hidden) {
-            currentAppRamMB = [self getAppMemoryUsageMB];
-            [self updateDashboardHUD];
-        }
-    }
-
-    if (menuContainer && !menuContainer.hidden) {
-        if (link.timestamp - lastPingCheckTime >= 5.0) {
-            lastPingCheckTime = link.timestamp;
-            [self measureNetworkPing];
-        }
-    }
++ (void)onHudTimerTick {
+    if (!menuContainer || menuContainer.hidden) return;
+    currentAppRamMB = [self getAppMemoryUsageMB];
+    [self measureNetworkPing];
+    [self updateDashboardHUD];
 }
 
 + (void)updateDashboardHUD {
@@ -810,8 +718,8 @@ static long currentAppRamMB = 0;
     NSString *timeStr = [df stringFromDate:[NSDate date]];
     float bat = [UIDevice currentDevice].batteryLevel;
     int batPct = (bat < 0) ? 100 : (int)(bat * 100.0f);
-    NSString *pingStr = (currentPingMs >= 0) ? [NSString stringWithFormat:@"%ldms", (long)currentPingMs] : @"-";
-    hudInfoLabel.text = [NSString stringWithFormat:@"⏱ %@ | 🔋 %d%% | ⚡ %ld FPS | 📶 %@ | 💾 %ld MB", timeStr, batPct, (long)currentFPS, pingStr, currentAppRamMB];
+    NSString *pingStr = (currentPingMs > 0) ? [NSString stringWithFormat:@"%ldms", (long)currentPingMs] : @"-";
+    hudInfoLabel.text = [NSString stringWithFormat:@"⏱ %@ | 🔋 %d%% | ⚡ %ldHz | 📶 %@ | 💾 %ld MB", timeStr, batPct, (long)currentFpsTarget, pingStr, currentAppRamMB];
 }
 
 + (UIButton *)createGlassButtonWithFrame:(CGRect)frame title:(NSString *)title color:(UIColor *)color {
@@ -832,11 +740,12 @@ static long currentAppRamMB = 0;
 // HÀM TIỆN ÍCH CƠ BẢN
 // ============================================================
 + (void)toggleCrosshair {
-    if (!baconOverlayView) return;
+    UIView *hostV = [self hostGameView];
+    if (!hostV) return;
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
     if (!crosshairContainer) {
         crosshairContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 24, 24)];
-        crosshairContainer.center = CGPointMake(baconOverlayView.bounds.size.width / 2, baconOverlayView.bounds.size.height / 2);
+        crosshairContainer.center = CGPointMake(hostV.bounds.size.width / 2, hostV.bounds.size.height / 2);
         crosshairContainer.userInteractionEnabled = NO;
         crosshairContainer.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
 
@@ -848,21 +757,25 @@ static long currentAppRamMB = 0;
         vLine.backgroundColor = [UIColor colorWithRed:0.2 green:1.0 blue:0.2 alpha:1.0];
         [crosshairContainer addSubview:vLine];
 
-        [baconOverlayView addSubview:crosshairContainer];
+        [hostV addSubview:crosshairContainer];
         [self triggerNotify:UINotificationFeedbackTypeSuccess];
         utilsResultDisplay.text = @"🎯 Đã Bật Tâm ngắm ảo giữa màn hình.";
     } else {
         crosshairContainer.hidden = !crosshairContainer.hidden;
+        if (!crosshairContainer.hidden) {
+            crosshairContainer.center = CGPointMake(hostV.bounds.size.width / 2, hostV.bounds.size.height / 2);
+        }
         [self triggerNotify:crosshairContainer.hidden ? UINotificationFeedbackTypeWarning : UINotificationFeedbackTypeSuccess];
         utilsResultDisplay.text = crosshairContainer.hidden ? @"🎯 Đã Tắt Tâm ngắm ảo." : @"🎯 Đã Bật Tâm ngắm ảo giữa màn hình.";
     }
 }
 
 + (void)toggleAFKMode {
-    if (!baconOverlayView) return;
+    UIView *hostV = [self hostGameView];
+    if (!hostV) return;
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
     if (!afkOverlay) {
-        afkOverlay = [[UIView alloc] initWithFrame:baconOverlayView.bounds];
+        afkOverlay = [[UIView alloc] initWithFrame:hostV.bounds];
         afkOverlay.backgroundColor = [UIColor blackColor];
         afkOverlay.alpha = 0.0;
         afkOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -879,10 +792,11 @@ static long currentAppRamMB = 0;
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(exitAFKMode)];
         tap.numberOfTapsRequired = 2;
         [afkOverlay addGestureRecognizer:tap];
-        [baconOverlayView addSubview:afkOverlay];
+        [hostV addSubview:afkOverlay];
     }
 
-    [baconOverlayView bringSubviewToFront:afkOverlay];
+    afkOverlay.frame = hostV.bounds;
+    [hostV bringSubviewToFront:afkOverlay];
     [self minimizeMenu];
     [UIView animateWithDuration:0.5 animations:^{ afkOverlay.alpha = 1.0; }];
     [self triggerNotify:UINotificationFeedbackTypeSuccess];
@@ -902,61 +816,25 @@ static long currentAppRamMB = 0;
 }
 
 // ============================================================
-// GIAO DIỆN CHÍNH
+// KHỞI TẠO MENU CHÍNH (LAZY-LOAD KHI BẤM NÚT ⚡)
 // ============================================================
-+ (void)setupViewsInContainer:(UIView *)rootV {
-    floatingCircleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    floatingCircleBtn.frame = CGRectMake(25, 120, 42, 42);
-
-    UIBlurEffect *btnBlur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
-    UIVisualEffectView *btnBlurView = [[UIVisualEffectView alloc] initWithEffect:btnBlur];
-    btnBlurView.frame = floatingCircleBtn.bounds;
-    btnBlurView.userInteractionEnabled = NO;
-    btnBlurView.layer.cornerRadius = 21.0;
-    btnBlurView.clipsToBounds = YES;
-    [floatingCircleBtn addSubview:btnBlurView];
-
-    floatingCircleBtn.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.1];
-    floatingCircleBtn.layer.cornerRadius = 21.0;
-    floatingCircleBtn.layer.borderWidth = 2.0;
-
-    UILabel *iconLbl = [[UILabel alloc] initWithFrame:floatingCircleBtn.bounds];
-    iconLbl.text = @"⚡";
-    iconLbl.font = [UIFont systemFontOfSize:18];
-    iconLbl.textAlignment = NSTextAlignmentCenter;
-    [floatingCircleBtn addSubview:iconLbl];
-
-    [floatingCircleBtn addTarget:self action:@selector(openMenu) forControlEvents:UIControlEventTouchUpInside];
-    UIPanGestureRecognizer *panBtn = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragCircle:)];
-    [floatingCircleBtn addGestureRecognizer:panBtn];
-    [rootV addSubview:floatingCircleBtn];
++ (void)ensureMenuBuiltInView:(UIView *)rootV {
+    if (menuContainer != nil) return;
 
     NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
-    CGFloat savedCircleX = [defs floatForKey:@"BaconBypass_CirclePosX"];
-    CGFloat savedCircleY = [defs floatForKey:@"BaconBypass_CirclePosY"];
-    if (savedCircleX > 0 && savedCircleY > 0) floatingCircleBtn.center = CGPointMake(savedCircleX, savedCircleY);
-
     CGFloat menuWidth = 340.0;
     CGFloat menuHeight = 250.0;
-    menuContainer = [[UIView alloc] initWithFrame:CGRectMake((rootV.bounds.size.width - menuWidth) / 2, 60, menuWidth, menuHeight)];
+    menuContainer = [[UIView alloc] initWithFrame:CGRectMake((rootV.bounds.size.width - menuWidth) / 2, 50, menuWidth, menuHeight)];
     menuContainer.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
-    menuContainer.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.15];
+    menuContainer.backgroundColor = [UIColor colorWithRed:0.07 green:0.07 blue:0.11 alpha:0.95];
     menuContainer.layer.cornerRadius = 24.0;
     if (@available(iOS 13.0, *)) { menuContainer.layer.cornerCurve = kCACornerCurveContinuous; }
     menuContainer.hidden = YES;
 
-    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
-    menuBlurView = [[UIVisualEffectView alloc] initWithEffect:blur];
-    menuBlurView.frame = menuContainer.bounds;
-    menuBlurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    menuBlurView.layer.cornerRadius = 24.0;
-    menuBlurView.clipsToBounds = YES;
-    [menuContainer addSubview:menuBlurView];
-
     menuBorderOverlay = [[UIView alloc] initWithFrame:menuContainer.bounds];
     menuBorderOverlay.layer.cornerRadius = 24.0;
     menuBorderOverlay.layer.borderWidth = 1.5;
-    menuBorderOverlay.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.2].CGColor;
+    menuBorderOverlay.layer.borderColor = [UIColor colorWithRed:1.0 green:0.82 blue:0.2 alpha:0.65].CGColor;
     menuBorderOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     menuBorderOverlay.userInteractionEnabled = NO;
     if (@available(iOS 13.0, *)) { menuBorderOverlay.layer.cornerCurve = kCACornerCurveContinuous; }
@@ -967,7 +845,11 @@ static long currentAppRamMB = 0;
 
     CGFloat savedMenuX = [defs floatForKey:@"BaconBypass_MenuPosX"];
     CGFloat savedMenuY = [defs floatForKey:@"BaconBypass_MenuPosY"];
-    if (savedMenuX > 0 && savedMenuY > 0) menuContainer.center = CGPointMake(savedMenuX, savedMenuY);
+    if (savedMenuX > 0 && savedMenuY > 0) {
+        CGFloat cx = MIN(MAX(menuWidth/2, savedMenuX), rootV.bounds.size.width - menuWidth/2);
+        CGFloat cy = MIN(MAX(menuHeight/2, savedMenuY), rootV.bounds.size.height - menuHeight/2);
+        menuContainer.center = CGPointMake(cx, cy);
+    }
 
     UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, menuWidth, 46)];
     [menuContainer addSubview:header];
@@ -1004,7 +886,7 @@ static long currentAppRamMB = 0;
     [menuContainer addSubview:sep1];
 
     menuDashboardBar = [[UIView alloc] initWithFrame:CGRectMake(16, 50, menuWidth - 32, 24)];
-    menuDashboardBar.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.2];
+    menuDashboardBar.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.25];
     menuDashboardBar.layer.cornerRadius = 6.0;
     [menuContainer addSubview:menuDashboardBar];
 
@@ -1021,11 +903,11 @@ static long currentAppRamMB = 0;
     bypassTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, bodyY, menuWidth, menuHeight - bodyY)];
     [menuContainer addSubview:bypassTabContainer];
 
-    NSString *savedKey = [[NSUserDefaults standardUserDefaults] stringForKey:STORAGE_KEY];
+    NSString *savedKey = [defs stringForKey:STORAGE_KEY];
     apiKeyInput = [[UITextField alloc] initWithFrame:CGRectMake(16, 4, menuWidth - 32, 34)];
     apiKeyInput.text = savedKey ?: DEFAULT_API_KEY;
     apiKeyInput.placeholder = @"Nhập Bacon API Key...";
-    apiKeyInput.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.3];
+    apiKeyInput.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.35];
     apiKeyInput.textColor = [UIColor colorWithRed:1.00 green:0.85 blue:0.30 alpha:1.0];
     apiKeyInput.font = [UIFont systemFontOfSize:12];
     apiKeyInput.layer.cornerRadius = 10.0;
@@ -1034,8 +916,6 @@ static long currentAppRamMB = 0;
     apiKeyInput.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 12, 34)];
     apiKeyInput.leftViewMode = UITextFieldViewModeAlways;
     apiKeyInput.hidden = YES;
-    [apiKeyInput addTarget:self action:@selector(onApiKeyEditingChanged) forControlEvents:UIControlEventEditingChanged];
-    [apiKeyInput addTarget:self action:@selector(onApiKeyEditingBegan) forControlEvents:UIControlEventEditingDidBegin];
     [bypassTabContainer addSubview:apiKeyInput];
 
     keyActionContainer = [[UIView alloc] initWithFrame:CGRectMake(16, 44, menuWidth - 32, 30)];
@@ -1104,13 +984,12 @@ static long currentAppRamMB = 0;
     resultBox.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
     [bypassTabContainer addSubview:resultBox];
 
-    resultDisplay = [[UITextView alloc] initWithFrame:CGRectMake(8, 4, menuWidth - 48, 42)];
+    // Sử dụng UILabel thay vì UITextView để không xung đột với TextBox của Roblox Console
+    resultDisplay = [[UILabel alloc] initWithFrame:CGRectMake(8, 4, menuWidth - 48, 42)];
     resultDisplay.text = @"Dán link rồi ấn Bypass Ngay...";
     resultDisplay.textColor = [UIColor colorWithWhite:0.7 alpha:1.0];
     resultDisplay.font = [UIFont systemFontOfSize:11];
-    resultDisplay.backgroundColor = [UIColor clearColor];
-    resultDisplay.editable = NO;
-    resultDisplay.selectable = YES;
+    resultDisplay.numberOfLines = 0;
     [resultBox addSubview:resultDisplay];
 
     // ==========================================
@@ -1153,72 +1032,112 @@ static long currentAppRamMB = 0;
     uResultBox.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
     [utilsTabContainer addSubview:uResultBox];
 
-    utilsResultDisplay = [[UITextView alloc] initWithFrame:CGRectMake(8, 2, menuWidth - 48, 40)];
+    utilsResultDisplay = [[UILabel alloc] initWithFrame:CGRectMake(8, 2, menuWidth - 48, 40)];
     utilsResultDisplay.text = @"Chọn tiện ích phía trên để sử dụng...";
     utilsResultDisplay.textColor = [UIColor colorWithWhite:0.7 alpha:1.0];
     utilsResultDisplay.font = [UIFont systemFontOfSize:11];
-    utilsResultDisplay.backgroundColor = [UIColor clearColor];
-    utilsResultDisplay.editable = NO;
-    utilsResultDisplay.selectable = YES;
+    utilsResultDisplay.numberOfLines = 0;
     [uResultBox addSubview:utilsResultDisplay];
 
     // ==========================================
-    // KHUNG NHẬP PIN ADMIN TÍCH HỢP
+    // BÀN PHÍM SỐ PIN ADMIN TRỰC TIẾP TRÊN MENU (KHÔNG CẦN BÀN PHÍM IOS)
     // ==========================================
-    pinPromptContainer = [[UIView alloc] initWithFrame:menuContainer.bounds];
+    enteredPinBuffer = [NSMutableString string];
+    pinPromptContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, menuWidth, 250)];
     pinPromptContainer.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.98];
     pinPromptContainer.layer.cornerRadius = 24.0;
     pinPromptContainer.clipsToBounds = YES;
     pinPromptContainer.hidden = YES;
 
-    UILabel *pinTitle = [[UILabel alloc] initWithFrame:CGRectMake(16, 16, menuWidth - 32, 22)];
-    pinTitle.text = @"🔐 QUYỀN QUẢN TRỊ VIÊN";
+    UILabel *pinTitle = [[UILabel alloc] initWithFrame:CGRectMake(16, 10, menuWidth - 32, 20)];
+    pinTitle.text = @"🔐 NHẬP MÃ PIN ADMIN";
     pinTitle.textColor = [UIColor colorWithRed:1.00 green:0.85 blue:0.20 alpha:1.0];
-    pinTitle.font = [UIFont boldSystemFontOfSize:14];
+    pinTitle.font = [UIFont boldSystemFontOfSize:13];
     pinTitle.textAlignment = NSTextAlignmentCenter;
     [pinPromptContainer addSubview:pinTitle];
 
-    UILabel *pinSub = [[UILabel alloc] initWithFrame:CGRectMake(16, 42, menuWidth - 32, 20)];
-    pinSub.text = @"Nhập mã PIN để mở khóa bảng điều khiển:";
-    pinSub.textColor = [UIColor colorWithWhite:0.8 alpha:1.0];
-    pinSub.font = [UIFont systemFontOfSize:11];
-    pinSub.textAlignment = NSTextAlignmentCenter;
-    [pinPromptContainer addSubview:pinSub];
+    pinDisplayLabel = [[UILabel alloc] initWithFrame:CGRectMake(40, 34, menuWidth - 80, 32)];
+    pinDisplayLabel.text = @"Bấm số bên dưới...";
+    pinDisplayLabel.textColor = [UIColor colorWithRed:0.4 green:0.85 blue:1.0 alpha:1.0];
+    pinDisplayLabel.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
+    pinDisplayLabel.layer.cornerRadius = 8.0;
+    pinDisplayLabel.layer.borderWidth = 1.0;
+    pinDisplayLabel.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.2].CGColor;
+    pinDisplayLabel.clipsToBounds = YES;
+    pinDisplayLabel.textAlignment = NSTextAlignmentCenter;
+    pinDisplayLabel.font = [UIFont boldSystemFontOfSize:14];
+    [pinPromptContainer addSubview:pinDisplayLabel];
 
-    pinInputField = [[UITextField alloc] initWithFrame:CGRectMake(30, 72, menuWidth - 60, 40)];
-    pinInputField.placeholder = @"Nhập mã PIN...";
-    pinInputField.secureTextEntry = YES;
-    pinInputField.keyboardType = UIKeyboardTypeNumberPad;
-    pinInputField.textAlignment = NSTextAlignmentCenter;
-    pinInputField.textColor = [UIColor colorWithRed:1.0 green:0.85 blue:0.3 alpha:1.0];
-    pinInputField.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.4];
-    pinInputField.layer.cornerRadius = 10.0;
-    pinInputField.layer.borderWidth = 1.0;
-    pinInputField.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.2].CGColor;
-    pinInputField.font = [UIFont boldSystemFontOfSize:16];
-    [pinPromptContainer addSubview:pinInputField];
+    NSArray *keys = @[@"1", @"2", @"3", @"4", @"5", @"6", @"7", @"8", @"9", @"✕ Hủy", @"0", @"⌫ Xóa"];
+    CGFloat padStartX = 28.0;
+    CGFloat padStartY = 74.0;
+    CGFloat keyW = (menuWidth - 56.0 - 16.0) / 3.0;
+    CGFloat keyH = 36.0;
 
-    UIButton *cancelPinBtn = [self createGlassButtonWithFrame:CGRectMake(30, 126, (menuWidth - 70) / 2, 36) title:@"✕ Hủy" color:[UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0]];
-    [cancelPinBtn addTarget:self action:@selector(onCancelPinPrompt) forControlEvents:UIControlEventTouchUpInside];
-    [pinPromptContainer addSubview:cancelPinBtn];
+    for (int i = 0; i < 12; i++) {
+        int row = i / 3;
+        int col = i % 3;
+        CGRect kf = CGRectMake(padStartX + col * (keyW + 8.0), padStartY + row * (keyH + 6.0), keyW, keyH);
+        UIColor *kColor = [UIColor colorWithRed:0.25 green:0.45 blue:0.85 alpha:1.0];
+        if (i == 9) kColor = [UIColor colorWithRed:0.9 green:0.25 blue:0.25 alpha:1.0];
+        else if (i == 11) kColor = [UIColor colorWithRed:0.85 green:0.55 blue:0.15 alpha:1.0];
 
-    UIButton *confirmPinBtn = [self createGlassButtonWithFrame:CGRectMake(CGRectGetMaxX(cancelPinBtn.frame) + 10, 126, (menuWidth - 70) / 2, 36) title:@"🔓 Mở Khóa" color:[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0]];
-    [confirmPinBtn addTarget:self action:@selector(onConfirmPinPrompt) forControlEvents:UIControlEventTouchUpInside];
-    [pinPromptContainer addSubview:confirmPinBtn];
+        UIButton *kBtn = [self createGlassButtonWithFrame:kf title:keys[i] color:kColor];
+        kBtn.tag = 2000 + i;
+        [kBtn addTarget:self action:@selector(onPinKeypadPressed:) forControlEvents:UIControlEventTouchUpInside];
+        [pinPromptContainer addSubview:kBtn];
+    }
 
     [menuContainer addSubview:pinPromptContainer];
     [rootV addSubview:menuContainer];
 
     [self setupHistoryOverlayInContainer:rootV];
     [self setupDeviceLogsOverlayInContainer:rootV];
-
     [self updateLayoutForAdminState:NO];
+}
 
-    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-        if (menuContainer && !menuContainer.hidden && !isUtilsTabActive) {
-            [self autoDetectClipboardLink];
++ (void)onPinKeypadPressed:(UIButton *)sender {
+    [self triggerImpact:UIImpactFeedbackStyleLight];
+    NSInteger idx = sender.tag - 2000;
+    if (idx == 9) { // Hủy
+        [enteredPinBuffer setString:@""];
+        pinPromptContainer.hidden = YES;
+        return;
+    } else if (idx == 11) { // Xóa
+        if (enteredPinBuffer.length > 0) {
+            [enteredPinBuffer deleteCharactersInRange:NSMakeRange(enteredPinBuffer.length - 1, 1)];
         }
-    }];
+    } else {
+        NSString *digit = (idx == 10) ? @"0" : [NSString stringWithFormat:@"%ld", (long)(idx + 1)];
+        if (enteredPinBuffer.length < 8) {
+            [enteredPinBuffer appendString:digit];
+        }
+    }
+
+    if (enteredPinBuffer.length == 0) {
+        pinDisplayLabel.text = @"Bấm số bên dưới...";
+    } else {
+        NSMutableString *dots = [NSMutableString string];
+        for (NSUInteger i = 0; i < enteredPinBuffer.length; i++) [dots appendString:@"● "];
+        pinDisplayLabel.text = dots;
+    }
+
+    // Tự động mở khóa ngay khi bấm đủ 6 số khớp mã PIN
+    if (enteredPinBuffer.length == ADMIN_PIN.length) {
+        if ([enteredPinBuffer isEqualToString:ADMIN_PIN]) {
+            [enteredPinBuffer setString:@""];
+            pinPromptContainer.hidden = YES;
+            isAdminMode = YES;
+            [self updateLayoutForAdminState:YES];
+            [self triggerNotify:UINotificationFeedbackTypeSuccess];
+            resultDisplay.text = @"👑 Đã mở khóa Admin! Có thể đổi Key, kiểm tra Quota & Thiết bị.";
+            resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
+        } else {
+            [self triggerNotify:UINotificationFeedbackTypeError];
+            [enteredPinBuffer setString:@""];
+            pinDisplayLabel.text = @"❌ Sai mã PIN! Nhập lại...";
+        }
+    }
 }
 
 + (void)toggleTabs {
@@ -1280,37 +1199,13 @@ static long currentAppRamMB = 0;
         return;
     }
 
-    pinInputField.text = @"";
-    pinInputField.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.2].CGColor;
+    [enteredPinBuffer setString:@""];
+    pinDisplayLabel.text = @"Bấm số bên dưới...";
     pinPromptContainer.hidden = NO;
     [menuContainer bringSubviewToFront:pinPromptContainer];
-    [pinInputField becomeFirstResponder];
 }
 
-+ (void)onConfirmPinPrompt {
-    NSString *enteredPIN = pinInputField.text;
-    if ([enteredPIN isEqualToString:ADMIN_PIN]) {
-        [pinInputField resignFirstResponder];
-        pinPromptContainer.hidden = YES;
-        isAdminMode = YES;
-        [self updateLayoutForAdminState:YES];
-        [self triggerNotify:UINotificationFeedbackTypeSuccess];
-        resultDisplay.text = @"👑 Xin chào Admin! Bạn có thể xem/đổi API Key, kiểm tra Quota hoặc người dùng.";
-        resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
-    } else {
-        [self triggerNotify:UINotificationFeedbackTypeError];
-        pinInputField.layer.borderColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0].CGColor;
-        pinInputField.text = @"";
-        resultDisplay.text = @"❌ Mật mã không đúng!";
-        resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
-    }
-}
-
-+ (void)onCancelPinPrompt {
-    [pinInputField resignFirstResponder];
-    pinPromptContainer.hidden = YES;
-}
-
+// Kiểm tra Quota qua endpoint chính thức api.baconbypass.xyz
 + (void)handleCheckKeyQuota {
     [self triggerImpact:UIImpactFeedbackStyleLight];
     [apiKeyInput resignFirstResponder];
@@ -1364,19 +1259,19 @@ static long currentAppRamMB = 0;
                 id limitVal = json[@"limitRequest"];
                 id usedVal = json[@"usedRequests"];
 
-                NSMutableString *info = [NSMutableString stringWithString:@"📊 THÔNG TIN API KEY:\n"];
+                NSMutableString *info = [NSMutableString stringWithString:@"📊 "];
                 if (remVal) {
-                    [info appendFormat:@"• Còn lại: %@ req | ", remVal];
+                    [info appendFormat:@"Còn lại: %@ req | ", remVal];
                 } else if (limitVal && usedVal) {
                     NSInteger r = [limitVal integerValue] - [usedVal integerValue];
-                    [info appendFormat:@"• Còn lại: %ld req | ", (long)r];
+                    [info appendFormat:@"Còn lại: %ld req | ", (long)r];
                 }
                 if (usedVal && limitVal) {
                     [info appendFormat:@"Đã dùng: %@/%@\n", usedVal, limitVal];
                 } else if (usedVal) {
                     [info appendFormat:@"Đã dùng: %@ req\n", usedVal];
                 }
-                [info appendFormat:@"• Thời hạn: %@", timeVal];
+                [info appendFormat:@"⏳ Thời hạn: %@", timeVal];
 
                 resultDisplay.text = info;
                 resultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
@@ -1420,7 +1315,7 @@ static long currentAppRamMB = 0;
 + (void)setupDeviceLogsOverlayInContainer:(UIView *)rootV {
     CGFloat dWidth = 320.0;
     CGFloat dHeight = 300.0;
-    deviceLogsContainer = [[UIView alloc] initWithFrame:CGRectMake((rootV.bounds.size.width - dWidth)/2, 80, dWidth, dHeight)];
+    deviceLogsContainer = [[UIView alloc] initWithFrame:CGRectMake((rootV.bounds.size.width - dWidth)/2, 60, dWidth, dHeight)];
     deviceLogsContainer.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
     deviceLogsContainer.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.98];
     deviceLogsContainer.layer.cornerRadius = 12.0;
@@ -1460,7 +1355,6 @@ static long currentAppRamMB = 0;
     deviceLogsScrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 36, dWidth, dHeight - 36)];
     [deviceLogsContainer addSubview:deviceLogsScrollView];
 
-    // Khung nhập biệt danh trực tiếp bên trong danh sách thiết bị
     nickPromptContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 36, dWidth, dHeight - 36)];
     nickPromptContainer.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.98];
     nickPromptContainer.hidden = YES;
@@ -1500,7 +1394,7 @@ static long currentAppRamMB = 0;
     [self triggerImpact:UIImpactFeedbackStyleLight];
     deviceLogsContainer.hidden = !deviceLogsContainer.hidden;
     if (!deviceLogsContainer.hidden) {
-        [baconOverlayView bringSubviewToFront:deviceLogsContainer];
+        [deviceLogsContainer.superview bringSubviewToFront:deviceLogsContainer];
         [self fetchDeviceLogsFromServer];
     } else {
         [nickInputField resignFirstResponder];
@@ -1633,7 +1527,7 @@ static long currentAppRamMB = 0;
 + (void)setupHistoryOverlayInContainer:(UIView *)rootV {
     CGFloat hWidth = 310.0;
     CGFloat hHeight = 240.0;
-    historyContainer = [[UIView alloc] initWithFrame:CGRectMake((rootV.bounds.size.width - hWidth)/2, 100, hWidth, hHeight)];
+    historyContainer = [[UIView alloc] initWithFrame:CGRectMake((rootV.bounds.size.width - hWidth)/2, 80, hWidth, hHeight)];
     historyContainer.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
     historyContainer.backgroundColor = [UIColor colorWithRed:0.09 green:0.09 blue:0.12 alpha:0.98];
     historyContainer.layer.cornerRadius = 12.0;
@@ -1682,7 +1576,7 @@ static long currentAppRamMB = 0;
     [self triggerImpact:UIImpactFeedbackStyleLight];
     historyContainer.hidden = !historyContainer.hidden;
     if (!historyContainer.hidden) {
-        [baconOverlayView bringSubviewToFront:historyContainer];
+        [historyContainer.superview bringSubviewToFront:historyContainer];
         [self reloadHistoryList];
     }
 }
@@ -1746,28 +1640,33 @@ static long currentAppRamMB = 0;
 }
 
 + (void)openMenu {
+    UIView *hostV = [self hostGameView];
+    if (!hostV) return;
+    [self ensureMenuBuiltInView:hostV];
+
     [self triggerImpact:UIImpactFeedbackStyleMedium];
     menuContainer.hidden = NO;
     floatingCircleBtn.hidden = YES;
-    [baconOverlayView bringSubviewToFront:menuContainer];
-    currentAppRamMB = [self getAppMemoryUsageMB];
-    [self updateDashboardHUD];
+    [hostV bringSubviewToFront:menuContainer];
+    [self startHudTimer];
     if (!isUtilsTabActive) [self autoDetectClipboardLink];
 }
 
 + (void)minimizeMenu {
     [self triggerImpact:UIImpactFeedbackStyleLight];
-    [linkInput resignFirstResponder];
-    [apiKeyInput resignFirstResponder];
-    [pinInputField resignFirstResponder];
-    [nickInputField resignFirstResponder];
-    pinPromptContainer.hidden = YES;
-    nickPromptContainer.hidden = YES;
-    menuContainer.hidden = YES;
-    historyContainer.hidden = YES;
-    deviceLogsContainer.hidden = YES;
-    floatingCircleBtn.hidden = NO;
-    [baconOverlayView bringSubviewToFront:floatingCircleBtn];
+    [self stopHudTimer];
+    if (linkInput) [linkInput resignFirstResponder];
+    if (apiKeyInput) [apiKeyInput resignFirstResponder];
+    if (nickInputField) [nickInputField resignFirstResponder];
+    if (pinPromptContainer) pinPromptContainer.hidden = YES;
+    if (nickPromptContainer) nickPromptContainer.hidden = YES;
+    if (menuContainer) menuContainer.hidden = YES;
+    if (historyContainer) historyContainer.hidden = YES;
+    if (deviceLogsContainer) deviceLogsContainer.hidden = YES;
+    if (floatingCircleBtn) {
+        floatingCircleBtn.hidden = NO;
+        [floatingCircleBtn.superview bringSubviewToFront:floatingCircleBtn];
+    }
 }
 
 + (NSString *)cleanString:(NSString *)str {
@@ -1777,9 +1676,6 @@ static long currentAppRamMB = 0;
     cleaned = [cleaned stringByReplacingOccurrencesOfString:@"'" withString:@""];
     return cleaned;
 }
-
-+ (void)onApiKeyEditingBegan { keyActionContainer.hidden = NO; }
-+ (void)onApiKeyEditingChanged { keyActionContainer.hidden = NO; }
 
 + (void)onConfirmSaveKey {
     [self triggerNotify:UINotificationFeedbackTypeSuccess];
@@ -1896,7 +1792,7 @@ static long currentAppRamMB = 0;
             linkInput.text = @"";
         } @catch (NSException *e) {
             [self triggerNotify:UINotificationFeedbackTypeError];
-            resultDisplay.text = @"❌ Lỗi sao chép! Hãy nhấn giữ text để copy.";
+            resultDisplay.text = @"❌ Lỗi sao chép!";
             resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
         }
     });
