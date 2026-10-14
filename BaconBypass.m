@@ -8,135 +8,9 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <stdlib.h>
-#include <pthread.h>
 
 // ============================================================
-// 0. LỚP GIÁP CHỐNG VĂNG CONSOLE DELTA TRÊN BẢN 2.741+ (SWIZZLE ARMOR)
-// Tự động đưa tác vụ vẽ Console về Main Thread & chặn lỗi chuỗi nil
-// ============================================================
-static void BaconSwizzleInstanceMethod(Class cls, SEL origSel, SEL swizSel) {
-    if (!cls) return;
-    Method origMethod = class_getInstanceMethod(cls, origSel);
-    Method swizMethod = class_getInstanceMethod(cls, swizSel);
-    if (!origMethod || !swizMethod) return;
-    BOOL didAdd = class_addMethod(cls, origSel, method_getImplementation(swizMethod), method_getTypeEncoding(swizMethod));
-    if (didAdd) {
-        class_replaceMethod(cls, swizSel, method_getImplementation(origMethod), method_getTypeEncoding(origMethod));
-    } else {
-        method_exchangeImplementations(origMethod, swizMethod);
-    }
-}
-
-@implementation NSAttributedString (BaconConsoleArmor)
-- (instancetype)bacon_initWithString:(NSString *)str {
-    @try {
-        return [self bacon_initWithString:(str ?: @"")];
-    } @catch (NSException *e) {
-        return [self bacon_initWithString:@""];
-    }
-}
-
-- (instancetype)bacon_initWithString:(NSString *)str attributes:(NSDictionary<NSAttributedStringKey, id> *)attrs {
-    @try {
-        return [self bacon_initWithString:(str ?: @"") attributes:attrs];
-    } @catch (NSException *e) {
-        return [self bacon_initWithString:@"" attributes:nil];
-    }
-}
-@end
-
-@implementation NSMutableAttributedString (BaconConsoleArmor)
-- (void)bacon_appendAttributedString:(NSAttributedString *)attrString {
-    if (!attrString) return;
-    @try {
-        [self bacon_appendAttributedString:attrString];
-    } @catch (NSException *e) {}
-}
-
-- (void)bacon_replaceCharactersInRange:(NSRange)range withString:(NSString *)str {
-    @try {
-        if (range.location + range.length <= self.length) {
-            [self bacon_replaceCharactersInRange:range withString:(str ?: @"")];
-        }
-    } @catch (NSException *e) {}
-}
-@end
-
-@implementation UITextView (BaconConsoleArmor)
-- (void)bacon_setText:(NSString *)text {
-    NSString *safeText = text ?: @"";
-    if (pthread_main_np()) {
-        @try { [self bacon_setText:safeText]; } @catch (NSException *e) {}
-    } else {
-        __weak typeof(self) weakSelf = self;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            @try { [weakSelf bacon_setText:safeText]; } @catch (NSException *e) {}
-        });
-    }
-}
-
-- (void)bacon_setAttributedText:(NSAttributedString *)attributedText {
-    if (pthread_main_np()) {
-        @try { [self bacon_setAttributedText:attributedText]; } @catch (NSException *e) {}
-    } else {
-        __weak typeof(self) weakSelf = self;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            @try { [weakSelf bacon_setAttributedText:attributedText]; } @catch (NSException *e) {}
-        });
-    }
-}
-@end
-
-@implementation UITableView (BaconConsoleArmor)
-- (void)bacon_reloadData {
-    if (pthread_main_np()) {
-        @try { [self bacon_reloadData]; } @catch (NSException *e) {}
-    } else {
-        __weak typeof(self) weakSelf = self;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            @try { [weakSelf bacon_reloadData]; } @catch (NSException *e) {}
-        });
-    }
-}
-@end
-
-@implementation UICollectionView (BaconConsoleArmor)
-- (void)bacon_reloadData {
-    if (pthread_main_np()) {
-        @try { [self bacon_reloadData]; } @catch (NSException *e) {}
-    } else {
-        __weak typeof(self) weakSelf = self;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            @try { [weakSelf bacon_reloadData]; } @catch (NSException *e) {}
-        });
-    }
-}
-@end
-
-static void InstallDeltaConsoleCrashArmor(void) {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        Class concreteAttr = NSClassFromString(@"NSConcreteAttributedString");
-        if (concreteAttr) {
-            BaconSwizzleInstanceMethod(concreteAttr, @selector(initWithString:), @selector(bacon_initWithString:));
-            BaconSwizzleInstanceMethod(concreteAttr, @selector(initWithString:attributes:), @selector(bacon_initWithString:attributes:));
-        }
-        Class concreteMutAttr = NSClassFromString(@"NSConcreteMutableAttributedString");
-        if (concreteMutAttr) {
-            BaconSwizzleInstanceMethod(concreteMutAttr, @selector(initWithString:), @selector(bacon_initWithString:));
-            BaconSwizzleInstanceMethod(concreteMutAttr, @selector(initWithString:attributes:), @selector(bacon_initWithString:attributes:));
-            BaconSwizzleInstanceMethod(concreteMutAttr, @selector(replaceCharactersInRange:withString:), @selector(bacon_replaceCharactersInRange:withString:));
-        }
-        BaconSwizzleInstanceMethod([NSMutableAttributedString class], @selector(appendAttributedString:), @selector(bacon_appendAttributedString:));
-        BaconSwizzleInstanceMethod([UITextView class], @selector(setText:), @selector(bacon_setText:));
-        BaconSwizzleInstanceMethod([UITextView class], @selector(setAttributedText:), @selector(bacon_setAttributedText:));
-        BaconSwizzleInstanceMethod([UITableView class], @selector(reloadData), @selector(bacon_reloadData));
-        BaconSwizzleInstanceMethod([UICollectionView class], @selector(reloadData), @selector(bacon_reloadData));
-    });
-}
-
-// ============================================================
-// 1. LỚP VIEW TRONG SUỐT (KHÔNG TẠO UIWINDOW PHỤ)
+// 1. LỚP VIEW TRONG SUỐT (KHÔNG TẠO UIWINDOW PHỤ -> CHỐNG VĂNG CONSOLE)
 // ============================================================
 static UIView *crosshairContainer = nil;
 static UIButton *floatingCircleBtn = nil;
@@ -216,6 +90,7 @@ static UIView *menuContainer = nil;
 #define HISTORY_KEY @"BaconBypass_HistoryLinks"
 
 static BaconPassthroughView *baconOverlayView = nil;
+static NSTimer *attachmentWatchdogTimer = nil;
 static UIVisualEffectView *menuBlurView = nil;
 static UIView *menuBorderOverlay = nil;
 static UIView *menuDashboardBar = nil;
@@ -276,10 +151,14 @@ static NSInteger currentPingMs = 0;
 static CFTimeInterval lastPingCheckTime = 0;
 static long currentAppRamMB = 0;
 
+// Tìm đúng cửa sổ hiển thị chính của Roblox (kể cả sau khi chuyển cảnh từ LaunchScreen)
 + (UIWindow *)findRobloxMainWindow {
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
+        if ([scene isKindOfClass:[UIWindowScene class]]) {
             UIWindowScene *windowScene = (UIWindowScene *)scene;
+            if (windowScene.keyWindow && !windowScene.keyWindow.hidden && windowScene.keyWindow.rootViewController != nil) {
+                return windowScene.keyWindow;
+            }
             for (UIWindow *win in windowScene.windows) {
                 if (!win.hidden && win.windowLevel == UIWindowLevelNormal && win.rootViewController != nil) {
                     return win;
@@ -834,36 +713,52 @@ static long currentAppRamMB = 0;
 }
 
 + (void)load {
-    // Kích hoạt lớp giáp bảo vệ Console ngay khi dylib nạp vào tiến trình
-    InstallDeltaConsoleCrashArmor();
-
     bgTaskIdentifier = UIBackgroundTaskInvalid;
     [UIDevice currentDevice].batteryMonitoringEnabled = YES;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self tryInjectOverlay];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self startAttachmentWatchdog];
         [self sendDeviceTelemetry];
     });
 }
 
-+ (void)tryInjectOverlay {
-    if (baconOverlayView != nil) return;
+// Bộ định thời nhẹ kiểm tra mỗi 1.5s để luôn gắn lại nút nổi khi Roblox đổi từ LaunchScreen sang màn hình chính
++ (void)startAttachmentWatchdog {
+    [self maintainOverlayAttachment];
+    if (!attachmentWatchdogTimer) {
+        attachmentWatchdogTimer = [NSTimer scheduledTimerWithTimeInterval:1.5 target:self selector:@selector(maintainOverlayAttachment) userInfo:nil repeats:YES];
+    }
+}
+
++ (void)maintainOverlayAttachment {
+    if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) return;
 
     UIWindow *mainWin = [self findRobloxMainWindow];
-    if (!mainWin || !mainWin.rootViewController || !mainWin.rootViewController.view) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [self tryInjectOverlay];
-        });
-        return;
-    }
+    if (!mainWin || !mainWin.rootViewController || !mainWin.rootViewController.view) return;
 
     UIView *hostView = mainWin.rootViewController.view;
-    baconOverlayView = [[BaconPassthroughView alloc] initWithFrame:hostView.bounds];
-    baconOverlayView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    baconOverlayView.backgroundColor = [UIColor clearColor];
-    [hostView addSubview:baconOverlayView];
+    if (hostView.bounds.size.width <= 0 || hostView.bounds.size.height <= 0) return;
 
-    [self setupViewsInContainer:baconOverlayView];
-    [self startDisplayLoop];
+    if (baconOverlayView == nil) {
+        baconOverlayView = [[BaconPassthroughView alloc] initWithFrame:hostView.bounds];
+        baconOverlayView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        baconOverlayView.backgroundColor = [UIColor clearColor];
+        baconOverlayView.layer.zPosition = 999.0f;
+        [hostView addSubview:baconOverlayView];
+
+        [self setupViewsInContainer:baconOverlayView];
+        [self startDisplayLoop];
+    } else {
+        if (baconOverlayView.superview != hostView) {
+            baconOverlayView.frame = hostView.bounds;
+            [hostView addSubview:baconOverlayView];
+            if (floatingCircleBtn) [self applyRainbowBorderAnimationToLayer:floatingCircleBtn.layer];
+            if (menuBorderOverlay) [self applyRainbowBorderAnimationToLayer:menuBorderOverlay.layer];
+        }
+        baconOverlayView.layer.zPosition = 999.0f;
+        if (hostView.subviews.lastObject != baconOverlayView) {
+            [hostView bringSubviewToFront:baconOverlayView];
+        }
+    }
 }
 
 // ============================================================
@@ -1343,6 +1238,7 @@ static long currentAppRamMB = 0;
     [self updateLayoutForAdminState:NO];
 
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
+        [self maintainOverlayAttachment];
         if (menuContainer && !menuContainer.hidden && !isUtilsTabActive) {
             [self autoDetectClipboardLink];
         }
