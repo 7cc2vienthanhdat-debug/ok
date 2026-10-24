@@ -10,52 +10,50 @@
 #include <stdlib.h>
 
 // ============================================================
-// 1. LỚP VIEW TRONG SUỐT (GẮN TRỰC TIẾP LÊN GAME)
-// Chống văng Delta Console & Đổi Server mượt mà
+// 1. CỬA SỔ OVERLAY ĐỘC LẬP (CHỐNG VĂNG CONSOLE & APP LAUNCH)
+// Tàng hình với hệ thống, chỉ nhận keyWindow khi nhập text
 // ============================================================
-static UIView *crosshairContainer = nil;
-static UIButton *floatingCircleBtn = nil;
-static UIView *menuContainer = nil;
+static BOOL g_overlayCanBeKey = NO;
 
-@interface BaconPassthroughView : UIView
+@interface BaconPassthroughWindow : UIWindow
 @end
 
-@implementation BaconPassthroughView
-
+@implementation BaconPassthroughWindow
+- (BOOL)canBecomeKeyWindow {
+    return g_overlayCanBeKey; 
+}
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hitView = [super hitTest:point withEvent:event];
-    if (hitView == self) {
-        return nil; // Xuyên thủng các điểm chạm ngoài menu xuống thẳng game
+    if (hitView == self || hitView == self.rootViewController.view) {
+        return nil; // Chạm xuyên thấu 100% xuống game và menu/console của Delta
     }
     return hitView;
 }
+@end
 
-- (void)layoutSubviews {
-    [super layoutSubviews];
-    CGSize size = self.bounds.size;
-    if (size.width <= 0 || size.height <= 0) return;
+static BaconPassthroughWindow *baconOverlayWindow = nil;
+static UIView *crosshairContainer = nil;
 
-    if (crosshairContainer) {
-        crosshairContainer.center = CGPointMake(size.width / 2.0, size.height / 2.0);
-    }
-    if (floatingCircleBtn) {
-        CGFloat cx = MIN(MAX(25.0, floatingCircleBtn.center.x), size.width - 25.0);
-        CGFloat cy = MIN(MAX(40.0, floatingCircleBtn.center.y), size.height - 25.0);
-        floatingCircleBtn.center = CGPointMake(cx, cy);
-    }
-    if (menuContainer) {
-        CGFloat halfW = menuContainer.bounds.size.width / 2.0;
-        CGFloat halfH = menuContainer.bounds.size.height / 2.0;
-        CGFloat mx = MIN(MAX(halfW + 6.0, menuContainer.center.x), size.width - halfW - 6.0);
-        CGFloat my = MIN(MAX(halfH + 6.0, menuContainer.center.y), size.height - halfH - 6.0);
-        menuContainer.center = CGPointMake(mx, my);
-    }
+@interface BaconOverlayViewController : UIViewController
+@end
+
+@implementation BaconOverlayViewController
+- (BOOL)shouldAutorotate { return YES; }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskAll; }
+- (BOOL)prefersStatusBarHidden { return YES; }
+
+- (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+        if (crosshairContainer) {
+            crosshairContainer.center = CGPointMake(size.width / 2.0, size.height / 2.0);
+        }
+    } completion:nil];
 }
-
 @end
 
 // ============================================================
-// 2. MAIN CONTROLLER & HỆ THỐNG TIỆN ÍCH BACONBYPASS
+// 2. ĐỐI TƯỢNG QUẢN LÝ TAB WEB BÓNG TRÒN NỔI
 // ============================================================
 @interface BaconWebTab : NSObject
 @property (nonatomic, assign) NSInteger tabId;
@@ -68,11 +66,18 @@ static UIView *menuContainer = nil;
 @property (nonatomic, strong) UITextField *urlField;
 @property (nonatomic, assign) BOOL isMinimized;
 @end
+
 @implementation BaconWebTab
 @end
 
+// ============================================================
+// 3. MAIN CONTROLLER & HỆ THỐNG TIỆN ÍCH BACONBYPASS
+// ============================================================
 @interface BaconBypassOverlay : NSObject <WKNavigationDelegate>
-+ (void)loadDylibSafely;
++ (void)load;
++ (void)autoDetectClipboardLink;
++ (void)onFieldEditingBegan;
++ (void)onFieldEditingEnded;
 @end
 
 @implementation BaconBypassOverlay
@@ -83,8 +88,8 @@ static UIView *menuContainer = nil;
 #define STORAGE_KEY @"BaconBypass_CustomAPIKey"
 #define HISTORY_KEY @"BaconBypass_HistoryLinks"
 
-static BaconPassthroughView *baconOverlayView = nil;
-static NSTimer *attachmentWatchdogTimer = nil;
+static UIButton *floatingCircleBtn = nil;
+static UIView *menuContainer = nil;
 static UIVisualEffectView *menuBlurView = nil;
 static UIView *menuBorderOverlay = nil;
 static UIView *menuDashboardBar = nil;
@@ -184,6 +189,21 @@ static long currentAppRamMB = 0;
     });
 }
 
++ (void)onFieldEditingBegan {
+    g_overlayCanBeKey = YES;
+    [baconOverlayWindow makeKeyWindow];
+}
+
++ (void)onFieldEditingEnded {
+    g_overlayCanBeKey = NO;
+    for (UIWindow *win in [UIApplication sharedApplication].windows) {
+        if (win != baconOverlayWindow && !win.hidden && win.rootViewController) {
+            [win makeKeyWindow];
+            break;
+        }
+    }
+}
+
 + (void)autoDetectClipboardLink {
     UIPasteboard *board = [UIPasteboard generalPasteboard];
     if (board && board.string) {
@@ -270,9 +290,8 @@ static long currentAppRamMB = 0;
     }
 }
 
-// Tab Web Browser...
 + (void)openNewWebTabWithURL:(NSString *)urlString {
-    if (!baconOverlayView) return;
+    if (!baconOverlayWindow) return;
     [self triggerImpact:UIImpactFeedbackStyleMedium];
     if (!webTabsList) webTabsList = [NSMutableArray array];
 
@@ -280,9 +299,10 @@ static long currentAppRamMB = 0;
     tab.tabId = nextTabId++;
     tab.isMinimized = NO;
 
-    CGFloat bWidth = MIN(baconOverlayView.bounds.size.width - 24, 360.0);
-    CGFloat bHeight = MIN(baconOverlayView.bounds.size.height - 80, 440.0);
-    tab.windowView = [[UIView alloc] initWithFrame:CGRectMake((baconOverlayView.bounds.size.width - bWidth) / 2, 40, bWidth, bHeight)];
+    UIView *rootV = baconOverlayWindow.rootViewController.view;
+    CGFloat bWidth = MIN(rootV.bounds.size.width - 24, 360.0);
+    CGFloat bHeight = MIN(rootV.bounds.size.height - 80, 440.0);
+    tab.windowView = [[UIView alloc] initWithFrame:CGRectMake((rootV.bounds.size.width - bWidth) / 2, 40, bWidth, bHeight)];
     tab.windowView.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.98];
     tab.windowView.layer.cornerRadius = 16.0;
     tab.windowView.layer.borderWidth = 1.2;
@@ -318,6 +338,8 @@ static long currentAppRamMB = 0;
     tab.urlField.returnKeyType = UIReturnKeyGo;
     tab.urlField.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 6, 28)];
     tab.urlField.leftViewMode = UITextFieldViewModeAlways;
+    [tab.urlField addTarget:self action:@selector(onFieldEditingBegan) forControlEvents:UIControlEventEditingDidBegin];
+    [tab.urlField addTarget:self action:@selector(onFieldEditingEnded) forControlEvents:UIControlEventEditingDidEnd];
     objc_setAssociatedObject(tab.urlField, "targetTab", tab, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [tab.urlField addTarget:self action:@selector(handleUrlFieldGo:) forControlEvents:UIControlEventEditingDidEndOnExit];
     [wHeader addSubview:tab.urlField];
@@ -375,9 +397,7 @@ static long currentAppRamMB = 0;
 
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     config.allowsInlineMediaPlayback = YES;
-    if (@available(iOS 10.0, *)) {
-        config.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
-    }
+    if (@available(iOS 10.0, *)) { config.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone; }
 
     tab.webView = [[WKWebView alloc] initWithFrame:CGRectMake(0, 72, bWidth, bHeight - 72) configuration:config];
     tab.webView.navigationDelegate = (id<WKNavigationDelegate>)self;
@@ -385,7 +405,7 @@ static long currentAppRamMB = 0;
     [tab.windowView addSubview:tab.webView];
 
     tab.bubbleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    tab.bubbleBtn.frame = CGRectMake(baconOverlayView.bounds.size.width - 55, 120 + (webTabsList.count * 50), 44, 44);
+    tab.bubbleBtn.frame = CGRectMake(rootV.bounds.size.width - 55, 120 + (webTabsList.count * 50), 44, 44);
     tab.bubbleBtn.layer.cornerRadius = 22.0;
     tab.bubbleBtn.layer.borderWidth = 2.0;
     tab.bubbleBtn.layer.borderColor = tab.themeColor.CGColor;
@@ -405,35 +425,24 @@ static long currentAppRamMB = 0;
     UIPanGestureRecognizer *panBubble = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragBubble:)];
     [tab.bubbleBtn addGestureRecognizer:panBubble];
 
-    [baconOverlayView addSubview:tab.bubbleBtn];
-    [baconOverlayView addSubview:tab.windowView];
+    [rootV addSubview:tab.bubbleBtn];
+    [rootV addSubview:tab.windowView];
     [webTabsList addObject:tab];
 
     [self loadTabURL:tab url:urlString];
 }
 
 + (void)loadTabURL:(BaconWebTab *)tab url:(NSString *)urlStr {
-    if (![urlStr hasPrefix:@"http://"] && ![urlStr hasPrefix:@"https://"]) {
-        urlStr = [NSString stringWithFormat:@"https://%@", urlStr];
-    }
+    if (![urlStr hasPrefix:@"http://"] && ![urlStr hasPrefix:@"https://"]) { urlStr = [NSString stringWithFormat:@"https://%@", urlStr]; }
     tab.urlField.text = urlStr;
     [tab.webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:urlStr]]];
     
     NSString *lower = [urlStr lowercaseString];
     UILabel *bIcon = [tab.bubbleBtn viewWithTag:999];
-    if ([lower containsString:@"tiktok.com"]) {
-        tab.iconText = @"🎵";
-        tab.themeColor = [UIColor colorWithRed:0.0 green:0.95 blue:0.85 alpha:1.0];
-    } else if ([lower containsString:@"youtube.com"] || [lower containsString:@"youtu.be"]) {
-        tab.iconText = @"▶️";
-        tab.themeColor = [UIColor colorWithRed:1.0 green:0.2 blue:0.2 alpha:1.0];
-    } else if ([lower containsString:@"facebook.com"] || [lower containsString:@"fb.com"]) {
-        tab.iconText = @"📘";
-        tab.themeColor = [UIColor colorWithRed:0.2 green:0.4 blue:1.0 alpha:1.0];
-    } else {
-        tab.iconText = @"🌐";
-        tab.themeColor = [UIColor colorWithRed:0.5 green:0.5 blue:0.9 alpha:1.0];
-    }
+    if ([lower containsString:@"tiktok.com"]) { tab.iconText = @"🎵"; tab.themeColor = [UIColor colorWithRed:0.0 green:0.95 blue:0.85 alpha:1.0]; }
+    else if ([lower containsString:@"youtube.com"] || [lower containsString:@"youtu.be"]) { tab.iconText = @"▶️"; tab.themeColor = [UIColor colorWithRed:1.0 green:0.2 blue:0.2 alpha:1.0]; }
+    else if ([lower containsString:@"facebook.com"] || [lower containsString:@"fb.com"]) { tab.iconText = @"📘"; tab.themeColor = [UIColor colorWithRed:0.2 green:0.4 blue:1.0 alpha:1.0]; }
+    else { tab.iconText = @"🌐"; tab.themeColor = [UIColor colorWithRed:0.5 green:0.5 blue:0.9 alpha:1.0]; }
     if (bIcon) bIcon.text = tab.iconText;
     tab.bubbleBtn.layer.borderColor = tab.themeColor.CGColor;
 }
@@ -443,10 +452,11 @@ static long currentAppRamMB = 0;
     BaconWebTab *tab = objc_getAssociatedObject(sender, "targetTab");
     if (!tab) return;
     [tab.urlField resignFirstResponder];
+    [self onFieldEditingEnded];
     tab.isMinimized = YES;
     tab.windowView.hidden = YES;
     tab.bubbleBtn.hidden = NO;
-    [baconOverlayView bringSubviewToFront:tab.bubbleBtn];
+    [baconOverlayWindow.rootViewController.view bringSubviewToFront:tab.bubbleBtn];
 }
 
 + (void)restoreTabFromBubble:(UIButton *)sender {
@@ -456,7 +466,7 @@ static long currentAppRamMB = 0;
     tab.isMinimized = NO;
     tab.bubbleBtn.hidden = YES;
     tab.windowView.hidden = NO;
-    [baconOverlayView bringSubviewToFront:tab.windowView];
+    [baconOverlayWindow.rootViewController.view bringSubviewToFront:tab.windowView];
 }
 
 + (void)closeTab:(UIButton *)sender {
@@ -464,6 +474,7 @@ static long currentAppRamMB = 0;
     BaconWebTab *tab = objc_getAssociatedObject(sender, "targetTab");
     if (!tab) return;
     [tab.urlField resignFirstResponder];
+    [self onFieldEditingEnded];
     [tab.webView stopLoading];
     [tab.webView removeFromSuperview];
     [tab.windowView removeFromSuperview];
@@ -477,9 +488,7 @@ static long currentAppRamMB = 0;
     if (tab) [tab.webView reload];
 }
 
-+ (void)promptNewTab {
-    [self openNewWebTabWithURL:@"https://www.google.com"];
-}
++ (void)promptNewTab { [self openNewWebTabWithURL:@"https://www.google.com"]; }
 
 + (void)loadQuickURL:(UIButton *)sender {
     [self triggerImpact:UIImpactFeedbackStyleLight];
@@ -490,6 +499,7 @@ static long currentAppRamMB = 0;
 
 + (void)handleUrlFieldGo:(UITextField *)sender {
     [sender resignFirstResponder];
+    [self onFieldEditingEnded];
     BaconWebTab *tab = objc_getAssociatedObject(sender, "targetTab");
     if (tab && sender.text.length > 0) [self loadTabURL:tab url:sender.text];
 }
@@ -508,7 +518,9 @@ static long currentAppRamMB = 0;
     [g setTranslation:CGPointZero inView:bubble.superview];
 }
 
-// Background Task
+// ============================================================
+// CHẠY NGẦM LIÊN TỤC
+// ============================================================
 + (NSData *)generateSilentWavData {
     NSMutableData *data = [NSMutableData data];
     int sampleRate = 44100; short channels = 1; short bitsPerSample = 16;
@@ -566,7 +578,7 @@ static long currentAppRamMB = 0;
         btnBackground.backgroundColor = [[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0] colorWithAlphaComponent:0.35];
         btnBackground.layer.borderColor = [UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0].CGColor;
         [self triggerNotify:UINotificationFeedbackTypeSuccess];
-        utilsResultDisplay.text = @"⚡ Đã BẬT Treo Liên Tục!";
+        utilsResultDisplay.text = @"⚡ Đã BẬT Treo Liên Tục! Khi thoát ra ngoài, game sẽ tiếp tục kết nối mạng.";
         utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
     } else {
         [self stopBackgroundAudio];
@@ -627,59 +639,33 @@ static long currentAppRamMB = 0;
 }
 
 // ============================================================
-// HỆ THỐNG KHỞI ĐỘNG CHỐNG VĂNG (BULLETPROOF INJECTION)
+// KHỞI TẠO AN TOÀN TUYỆT ĐỐI (BULLETPROOF INJECTION)
 // ============================================================
-// Sử dụng hàm Constructor chạy trước nhưng chỉ đăng ký Notification.
-// Chờ đến khi App Load Xong hoàn toàn (DidBecomeActive) mới chạy vòng lặp UI để không đụng chạm bộ nhớ gốc.
-static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-            [BaconBypassOverlay loadDylibSafely];
-        }];
-    });
++ (void)load {
+    // Không làm gì cả lúc Load để tránh Crash trên LaunchScreen
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            // Chờ 1.5 giây sau khi game vào hẳn màn hình chính mới tạo Cửa Sổ Menu
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [self tryInjectOverlay];
+                [self sendDeviceTelemetry];
+            });
+        });
+    }];
 }
 
-+ (void)loadDylibSafely {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        bgTaskIdentifier = UIBackgroundTaskInvalid;
-        [UIDevice currentDevice].batteryMonitoringEnabled = YES;
-        [self sendDeviceTelemetry];
-        
-        // Cứ mỗi 1 giây quét lại màn hình gốc của game 1 lần để bám dính Menu ngay cả khi Roblox đổi màn hình từ LaunchScreen sang MainGame
-        attachmentWatchdogTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(maintainOverlayAttachment) userInfo:nil repeats:YES];
-    });
-}
++ (void)tryInjectOverlay {
+    if (baconOverlayWindow != nil) return;
 
-+ (void)maintainOverlayAttachment {
-    if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) return;
+    baconOverlayWindow = [[BaconPassthroughWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    baconOverlayWindow.windowLevel = UIWindowLevelNormal + 1.0; 
+    baconOverlayWindow.backgroundColor = [UIColor clearColor];
+    baconOverlayWindow.rootViewController = [[BaconOverlayViewController alloc] init];
+    baconOverlayWindow.hidden = NO;
 
-    UIWindow *mainWin = [UIApplication sharedApplication].keyWindow;
-    if (!mainWin || !mainWin.rootViewController || !mainWin.rootViewController.view) return;
-
-    UIView *hostView = mainWin.rootViewController.view;
-    if (hostView.bounds.size.width <= 0 || hostView.bounds.size.height <= 0) return;
-
-    if (baconOverlayView == nil) {
-        baconOverlayView = [[BaconPassthroughView alloc] initWithFrame:hostView.bounds];
-        baconOverlayView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        baconOverlayView.backgroundColor = [UIColor clearColor];
-        baconOverlayView.layer.zPosition = 9999.0f; // Luôn nằm trên cùng mọi Controller
-        [hostView addSubview:baconOverlayView];
-
-        [self setupViewsInContainer:baconOverlayView];
-        [self startDisplayLoop];
-    } else {
-        if (baconOverlayView.superview != hostView) {
-            [baconOverlayView removeFromSuperview];
-            baconOverlayView.frame = hostView.bounds;
-            [hostView addSubview:baconOverlayView];
-        }
-        baconOverlayView.layer.zPosition = 9999.0f;
-        if (hostView.subviews.lastObject != baconOverlayView) {
-            [hostView bringSubviewToFront:baconOverlayView];
-        }
-    }
+    [self setupViewsInContainer:baconOverlayWindow.rootViewController.view];
+    [self startDisplayLoop];
 }
 
 // ============================================================
@@ -755,11 +741,12 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
 }
 
 + (void)toggleCrosshair {
-    if (!baconOverlayView) return;
+    if (!baconOverlayWindow) return;
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
     if (!crosshairContainer) {
+        UIView *rootV = baconOverlayWindow.rootViewController.view;
         crosshairContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 24, 24)];
-        crosshairContainer.center = CGPointMake(baconOverlayView.bounds.size.width / 2, baconOverlayView.bounds.size.height / 2);
+        crosshairContainer.center = CGPointMake(rootV.bounds.size.width / 2, rootV.bounds.size.height / 2);
         crosshairContainer.userInteractionEnabled = NO;
         crosshairContainer.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
         UIView *hLine = [[UIView alloc] initWithFrame:CGRectMake(0, 11, 24, 2)];
@@ -768,7 +755,7 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
         UIView *vLine = [[UIView alloc] initWithFrame:CGRectMake(11, 0, 2, 24)];
         vLine.backgroundColor = [UIColor colorWithRed:0.2 green:1.0 blue:0.2 alpha:1.0];
         [crosshairContainer addSubview:vLine];
-        [baconOverlayView addSubview:crosshairContainer];
+        [rootV addSubview:crosshairContainer];
         [self triggerNotify:UINotificationFeedbackTypeSuccess];
         utilsResultDisplay.text = @"🎯 Đã Bật Tâm ngắm ảo giữa màn hình.";
     } else {
@@ -779,10 +766,11 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
 }
 
 + (void)toggleAFKMode {
-    if (!baconOverlayView) return;
+    if (!baconOverlayWindow) return;
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
+    UIView *rootV = baconOverlayWindow.rootViewController.view;
     if (!afkOverlay) {
-        afkOverlay = [[UIView alloc] initWithFrame:baconOverlayView.bounds];
+        afkOverlay = [[UIView alloc] initWithFrame:rootV.bounds];
         afkOverlay.backgroundColor = [UIColor blackColor];
         afkOverlay.alpha = 0.0;
         afkOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -797,9 +785,9 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(exitAFKMode)];
         tap.numberOfTapsRequired = 2;
         [afkOverlay addGestureRecognizer:tap];
-        [baconOverlayView addSubview:afkOverlay];
+        [rootV addSubview:afkOverlay];
     }
-    [baconOverlayView bringSubviewToFront:afkOverlay];
+    [rootV bringSubviewToFront:afkOverlay];
     [self minimizeMenu];
     [UIView animateWithDuration:0.5 animations:^{ afkOverlay.alpha = 1.0; }];
     [self triggerNotify:UINotificationFeedbackTypeSuccess];
@@ -949,6 +937,9 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
     apiKeyInput.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 12, 34)];
     apiKeyInput.leftViewMode = UITextFieldViewModeAlways;
     apiKeyInput.hidden = YES;
+    [apiKeyInput addTarget:self action:@selector(onApiKeyEditingChanged) forControlEvents:UIControlEventEditingChanged];
+    [apiKeyInput addTarget:self action:@selector(onFieldEditingBegan) forControlEvents:UIControlEventEditingDidBegin];
+    [apiKeyInput addTarget:self action:@selector(onFieldEditingEnded) forControlEvents:UIControlEventEditingDidEnd];
     [bypassTabContainer addSubview:apiKeyInput];
 
     keyActionContainer = [[UIView alloc] initWithFrame:CGRectMake(16, 44, menuWidth - 32, 30)];
@@ -986,6 +977,8 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
     linkInput.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.15].CGColor;
     linkInput.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 14, 40)];
     linkInput.leftViewMode = UITextFieldViewModeAlways;
+    [linkInput addTarget:self action:@selector(onFieldEditingBegan) forControlEvents:UIControlEventEditingDidBegin];
+    [linkInput addTarget:self action:@selector(onFieldEditingEnded) forControlEvents:UIControlEventEditingDidEnd];
     [bypassTabContainer addSubview:linkInput];
 
     bypassBtn = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -1105,6 +1098,8 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
     pinInputField.layer.borderWidth = 1.0;
     pinInputField.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.2].CGColor;
     pinInputField.font = [UIFont boldSystemFontOfSize:16];
+    [pinInputField addTarget:self action:@selector(onFieldEditingBegan) forControlEvents:UIControlEventEditingDidBegin];
+    [pinInputField addTarget:self action:@selector(onFieldEditingEnded) forControlEvents:UIControlEventEditingDidEnd];
     [pinPromptContainer addSubview:pinInputField];
 
     UIButton *cancelPinBtn = [self createGlassButtonWithFrame:CGRectMake(30, 126, (menuWidth - 70) / 2, 36) title:@"✕ Hủy" color:[UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0]];
@@ -1194,6 +1189,7 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
     NSString *enteredPIN = pinInputField.text;
     if ([enteredPIN isEqualToString:ADMIN_PIN]) {
         [pinInputField resignFirstResponder];
+        [self onFieldEditingEnded];
         pinPromptContainer.hidden = YES;
         isAdminMode = YES;
         [self updateLayoutForAdminState:YES];
@@ -1211,6 +1207,7 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
 
 + (void)onCancelPinPrompt {
     [pinInputField resignFirstResponder];
+    [self onFieldEditingEnded];
     pinPromptContainer.hidden = YES;
 }
 
@@ -1218,6 +1215,7 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
     [self triggerImpact:UIImpactFeedbackStyleLight];
     [apiKeyInput resignFirstResponder];
     [linkInput resignFirstResponder];
+    [self onFieldEditingEnded];
 
     NSString *key = [self cleanString:apiKeyInput.text];
     if (key.length == 0) {
@@ -1260,9 +1258,7 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
             if ([status isEqualToString:@"success"]) {
                 [self triggerNotify:UINotificationFeedbackTypeSuccess];
                 NSString *timeVal = [NSString stringWithFormat:@"%@", json[@"time"] ?: @"-"];
-                if ([timeVal isEqualToString:@"i"]) {
-                    timeVal = @"Vô hạn";
-                }
+                if ([timeVal isEqualToString:@"i"]) { timeVal = @"Vô hạn"; }
                 id remVal = json[@"remaining"];
                 id limitVal = json[@"limitRequest"];
                 id usedVal = json[@"usedRequests"];
@@ -1384,6 +1380,8 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
     nickInputField.font = [UIFont systemFontOfSize:13];
     nickInputField.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 10, 36)];
     nickInputField.leftViewMode = UITextFieldViewModeAlways;
+    [nickInputField addTarget:self action:@selector(onFieldEditingBegan) forControlEvents:UIControlEventEditingDidBegin];
+    [nickInputField addTarget:self action:@selector(onFieldEditingEnded) forControlEvents:UIControlEventEditingDidEnd];
     [nickPromptContainer addSubview:nickInputField];
 
     UIButton *cancelNBtn = [self createGlassButtonWithFrame:CGRectMake(24, 104, (dWidth - 58)/2, 34) title:@"Hủy" color:[UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0]];
@@ -1402,10 +1400,11 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
     [self triggerImpact:UIImpactFeedbackStyleLight];
     deviceLogsContainer.hidden = !deviceLogsContainer.hidden;
     if (!deviceLogsContainer.hidden) {
-        [baconOverlayView bringSubviewToFront:deviceLogsContainer];
+        [baconOverlayWindow.rootViewController.view bringSubviewToFront:deviceLogsContainer];
         [self fetchDeviceLogsFromServer];
     } else {
         [nickInputField resignFirstResponder];
+        [self onFieldEditingEnded];
         nickPromptContainer.hidden = YES;
     }
 }
@@ -1501,6 +1500,7 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
 
 + (void)onConfirmNickPrompt {
     [nickInputField resignFirstResponder];
+    [self onFieldEditingEnded];
     nickPromptContainer.hidden = YES;
     if (editingDeviceID) {
         [self sendSaveNicknameToServer:editingDeviceID nickname:nickInputField.text];
@@ -1509,6 +1509,7 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
 
 + (void)onCancelNickPrompt {
     [nickInputField resignFirstResponder];
+    [self onFieldEditingEnded];
     nickPromptContainer.hidden = YES;
 }
 
@@ -1584,7 +1585,7 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
     [self triggerImpact:UIImpactFeedbackStyleLight];
     historyContainer.hidden = !historyContainer.hidden;
     if (!historyContainer.hidden) {
-        [baconOverlayView bringSubviewToFront:historyContainer];
+        [baconOverlayWindow.rootViewController.view bringSubviewToFront:historyContainer];
         [self reloadHistoryList];
     }
 }
@@ -1649,12 +1650,12 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
 
 + (void)openMenu {
     [self triggerImpact:UIImpactFeedbackStyleMedium];
-    if (baconOverlayView && baconOverlayView.superview) {
-        [baconOverlayView.superview bringSubviewToFront:baconOverlayView];
+    if (baconOverlayWindow && baconOverlayWindow.hidden == NO) {
+        [baconOverlayWindow makeKeyAndVisible]; // Ensure visibility when explicitly opened
     }
     menuContainer.hidden = NO;
     floatingCircleBtn.hidden = YES;
-    [baconOverlayView bringSubviewToFront:menuContainer];
+    [baconOverlayWindow.rootViewController.view bringSubviewToFront:menuContainer];
     if (renderLoop) renderLoop.paused = NO;
     currentAppRamMB = [self getAppMemoryUsageMB];
     [self updateDashboardHUD];
@@ -1668,6 +1669,8 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
     [apiKeyInput resignFirstResponder];
     [pinInputField resignFirstResponder];
     [nickInputField resignFirstResponder];
+    [self onFieldEditingEnded];
+    
     pinPromptContainer.hidden = YES;
     nickPromptContainer.hidden = YES;
     menuContainer.hidden = YES;
@@ -1675,7 +1678,7 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
     deviceLogsContainer.hidden = YES;
     floatingCircleBtn.hidden = NO;
     if (renderLoop) renderLoop.paused = YES;
-    [baconOverlayView bringSubviewToFront:floatingCircleBtn];
+    [baconOverlayWindow.rootViewController.view bringSubviewToFront:floatingCircleBtn];
 }
 
 + (NSString *)cleanString:(NSString *)str {
@@ -1686,12 +1689,16 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
     return cleaned;
 }
 
-+ (void)onApiKeyEditingBegan { keyActionContainer.hidden = NO; }
++ (void)onApiKeyEditingBegan { 
+    keyActionContainer.hidden = NO; 
+    [self onFieldEditingBegan];
+}
 + (void)onApiKeyEditingChanged { keyActionContainer.hidden = NO; }
 
 + (void)onConfirmSaveKey {
     [self triggerNotify:UINotificationFeedbackTypeSuccess];
     [apiKeyInput resignFirstResponder];
+    [self onFieldEditingEnded];
     NSString *newKey = [self cleanString:apiKeyInput.text];
     if (newKey.length > 0) {
         [[NSUserDefaults standardUserDefaults] setObject:newKey forKey:STORAGE_KEY];
@@ -1704,6 +1711,7 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
 + (void)onDiscardKey {
     [self triggerImpact:UIImpactFeedbackStyleLight];
     [apiKeyInput resignFirstResponder];
+    [self onFieldEditingEnded];
     NSString *savedKey = [[NSUserDefaults standardUserDefaults] stringForKey:STORAGE_KEY];
     if (!savedKey || savedKey.length == 0) savedKey = DEFAULT_API_KEY;
     apiKeyInput.text = savedKey;
@@ -1715,6 +1723,7 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
     [self triggerImpact:UIImpactFeedbackStyleMedium];
     [linkInput resignFirstResponder];
     [apiKeyInput resignFirstResponder];
+    [self onFieldEditingEnded];
 
     if (isServerKillswitchActive && !isAdminMode) {
         [self triggerNotify:UINotificationFeedbackTypeError];
@@ -1744,7 +1753,6 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:endpoint];
     req.HTTPMethod = @"POST";
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-
     NSDictionary *body = @{ @"url": url, @"apikey": key };
     req.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
 
@@ -1808,32 +1816,6 @@ static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
             resultDisplay.textColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:1.0];
         }
     });
-}
-
-+ (void)handleDragCircle:(UIPanGestureRecognizer *)g {
-    CGPoint trans = [g translationInView:floatingCircleBtn.superview];
-    floatingCircleBtn.center = CGPointMake(floatingCircleBtn.center.x + trans.x, floatingCircleBtn.center.y + trans.y);
-    [g setTranslation:CGPointZero inView:floatingCircleBtn.superview];
-
-    if (g.state == UIGestureRecognizerStateEnded) {
-        NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
-        [defs setFloat:floatingCircleBtn.center.x forKey:@"BaconBypass_CirclePosX"];
-        [defs setFloat:floatingCircleBtn.center.y forKey:@"BaconBypass_CirclePosY"];
-        [defs synchronize];
-    }
-}
-
-+ (void)handleDragMenu:(UIPanGestureRecognizer *)g {
-    CGPoint trans = [g translationInView:menuContainer.superview];
-    menuContainer.center = CGPointMake(menuContainer.center.x + trans.x, menuContainer.center.y + trans.y);
-    [g setTranslation:CGPointZero inView:menuContainer.superview];
-
-    if (g.state == UIGestureRecognizerStateEnded) {
-        NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
-        [defs setFloat:menuContainer.center.x forKey:@"BaconBypass_MenuPosX"];
-        [defs setFloat:menuContainer.center.y forKey:@"BaconBypass_MenuPosY"];
-        [defs synchronize];
-    }
 }
 
 @end
