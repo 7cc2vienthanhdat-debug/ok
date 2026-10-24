@@ -10,7 +10,7 @@
 #include <stdlib.h>
 
 // ============================================================
-// 1. LỚP VIEW TRONG SUỐT (KHÔNG TẠO UIWINDOW PHỤ -> CHỐNG VĂNG CONSOLE)
+// 1. LỚP VIEW TRONG SUỐT (KHÔNG TẠO UIWINDOW PHỤ -> CHỐNG VĂNG CONSOLE DELTA)
 // ============================================================
 static UIView *crosshairContainer = nil;
 static UIButton *floatingCircleBtn = nil;
@@ -24,7 +24,7 @@ static UIView *menuContainer = nil;
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hitView = [super hitTest:point withEvent:event];
     if (hitView == self) {
-        return nil; // Chạm xuyên thấu 100% xuống game và menu/console của Delta
+        return nil; // Chạm xuyên thấu 100% xuống game và giao diện của Delta (Menu, Console)
     }
     return hitView;
 }
@@ -151,7 +151,6 @@ static NSInteger currentPingMs = 0;
 static CFTimeInterval lastPingCheckTime = 0;
 static long currentAppRamMB = 0;
 
-// Tìm đúng cửa sổ hiển thị chính của Roblox (kể cả sau khi chuyển cảnh từ LaunchScreen)
 + (UIWindow *)findRobloxMainWindow {
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
         if ([scene isKindOfClass:[UIWindowScene class]]) {
@@ -715,13 +714,15 @@ static long currentAppRamMB = 0;
 + (void)load {
     bgTaskIdentifier = UIBackgroundTaskInvalid;
     [UIDevice currentDevice].batteryMonitoringEnabled = YES;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [self startAttachmentWatchdog];
         [self sendDeviceTelemetry];
     });
 }
 
-// Bộ định thời nhẹ kiểm tra mỗi 1.5s để luôn gắn lại nút nổi khi Roblox đổi từ LaunchScreen sang màn hình chính
+// ============================================================
+// BỘ ĐỊNH THỜI PHỤC HỒI GIAO DIỆN KHI VÀO GAME
+// ============================================================
 + (void)startAttachmentWatchdog {
     [self maintainOverlayAttachment];
     if (!attachmentWatchdogTimer) {
@@ -1236,13 +1237,6 @@ static long currentAppRamMB = 0;
     [self setupDeviceLogsOverlayInContainer:rootV];
 
     [self updateLayoutForAdminState:NO];
-
-    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-        [self maintainOverlayAttachment];
-        if (menuContainer && !menuContainer.hidden && !isUtilsTabActive) {
-            [self autoDetectClipboardLink];
-        }
-    }];
 }
 
 + (void)toggleTabs {
