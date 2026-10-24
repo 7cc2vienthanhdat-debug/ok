@@ -10,7 +10,8 @@
 #include <stdlib.h>
 
 // ============================================================
-// 1. LỚP VIEW TRONG SUỐT (KHÔNG TẠO UIWINDOW PHỤ -> CHỐNG VĂNG CONSOLE DELTA)
+// 1. LỚP VIEW TRONG SUỐT (GẮN TRỰC TIẾP LÊN GAME)
+// Chống văng Delta Console & Đổi Server mượt mà
 // ============================================================
 static UIView *crosshairContainer = nil;
 static UIButton *floatingCircleBtn = nil;
@@ -24,7 +25,7 @@ static UIView *menuContainer = nil;
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hitView = [super hitTest:point withEvent:event];
     if (hitView == self) {
-        return nil; // Chạm xuyên thấu 100% xuống game và giao diện của Delta (Menu, Console)
+        return nil; // Xuyên thủng các điểm chạm ngoài menu xuống thẳng game
     }
     return hitView;
 }
@@ -37,13 +38,11 @@ static UIView *menuContainer = nil;
     if (crosshairContainer) {
         crosshairContainer.center = CGPointMake(size.width / 2.0, size.height / 2.0);
     }
-
     if (floatingCircleBtn) {
         CGFloat cx = MIN(MAX(25.0, floatingCircleBtn.center.x), size.width - 25.0);
         CGFloat cy = MIN(MAX(40.0, floatingCircleBtn.center.y), size.height - 25.0);
         floatingCircleBtn.center = CGPointMake(cx, cy);
     }
-
     if (menuContainer) {
         CGFloat halfW = menuContainer.bounds.size.width / 2.0;
         CGFloat halfH = menuContainer.bounds.size.height / 2.0;
@@ -56,7 +55,7 @@ static UIView *menuContainer = nil;
 @end
 
 // ============================================================
-// 2. ĐỐI TƯỢNG QUẢN LÝ TAB WEB BÓNG TRÒN NỔI
+// 2. MAIN CONTROLLER & HỆ THỐNG TIỆN ÍCH BACONBYPASS
 // ============================================================
 @interface BaconWebTab : NSObject
 @property (nonatomic, assign) NSInteger tabId;
@@ -69,16 +68,11 @@ static UIView *menuContainer = nil;
 @property (nonatomic, strong) UITextField *urlField;
 @property (nonatomic, assign) BOOL isMinimized;
 @end
-
 @implementation BaconWebTab
 @end
 
-// ============================================================
-// 3. MAIN CONTROLLER & HỆ THỐNG TIỆN ÍCH BACONBYPASS
-// ============================================================
 @interface BaconBypassOverlay : NSObject <WKNavigationDelegate>
-+ (void)load;
-+ (void)autoDetectClipboardLink;
++ (void)loadDylibSafely;
 @end
 
 @implementation BaconBypassOverlay
@@ -125,7 +119,6 @@ static UIButton *viewDevicesBtn = nil;
 static UIButton *killswitchBtn = nil;
 static NSString *extractedLink = nil;
 
-// Tab Tiện ích
 static UIView *utilsTabContainer = nil;
 static UITextView *utilsResultDisplay = nil;
 static UIView *afkOverlay = nil;
@@ -150,28 +143,6 @@ static NSInteger currentFPS = 60;
 static NSInteger currentPingMs = 0;
 static CFTimeInterval lastPingCheckTime = 0;
 static long currentAppRamMB = 0;
-
-+ (UIWindow *)findRobloxMainWindow {
-    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if ([scene isKindOfClass:[UIWindowScene class]]) {
-            UIWindowScene *windowScene = (UIWindowScene *)scene;
-            if (windowScene.keyWindow && !windowScene.keyWindow.hidden && windowScene.keyWindow.rootViewController != nil) {
-                return windowScene.keyWindow;
-            }
-            for (UIWindow *win in windowScene.windows) {
-                if (!win.hidden && win.windowLevel == UIWindowLevelNormal && win.rootViewController != nil) {
-                    return win;
-                }
-            }
-        }
-    }
-    for (UIWindow *win in [UIApplication sharedApplication].windows) {
-        if (!win.hidden && win.windowLevel == UIWindowLevelNormal && win.rootViewController != nil) {
-            return win;
-        }
-    }
-    return nil;
-}
 
 + (void)applyRainbowBorderAnimationToLayer:(CALayer *)layer {
     if (!layer) return;
@@ -244,8 +215,7 @@ static long currentAppRamMB = 0;
     [[session dataTaskWithRequest:req completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
         isMeasuring = NO;
         if (!error) {
-            CFAbsoluteTime delta = CFAbsoluteTimeGetCurrent() - startTime;
-            currentPingMs = (NSInteger)round(delta * 1000.0);
+            currentPingMs = (NSInteger)round((CFAbsoluteTimeGetCurrent() - startTime) * 1000.0);
         } else {
             currentPingMs = -1;
         }
@@ -253,9 +223,15 @@ static long currentAppRamMB = 0;
     }] resume];
 }
 
-// ============================================================
-// FPS LIMITER & MUTE GAME
-// ============================================================
++ (void)applyFPSLimit:(NSInteger)fps {
+    if (!renderLoop) return;
+    if (@available(iOS 15.0, *)) {
+        renderLoop.preferredFrameRateRange = CAFrameRateRangeMake(fps / 2, fps, fps);
+    } else {
+        renderLoop.preferredFramesPerSecond = fps;
+    }
+}
+
 + (void)cycleFPSTarget {
     [self triggerImpact:UIImpactFeedbackStyleMedium];
     if (currentFpsTarget == 60) currentFpsTarget = 120;
@@ -267,15 +243,6 @@ static long currentAppRamMB = 0;
     [self triggerNotify:UINotificationFeedbackTypeSuccess];
     utilsResultDisplay.text = [NSString stringWithFormat:@"🚀 Đã áp dụng tần số quét: %ld FPS!", (long)currentFpsTarget];
     utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
-}
-
-+ (void)applyFPSLimit:(NSInteger)fps {
-    if (!renderLoop) return;
-    if (@available(iOS 15.0, *)) {
-        renderLoop.preferredFrameRateRange = CAFrameRateRangeMake(fps / 2, fps, fps);
-    } else {
-        renderLoop.preferredFramesPerSecond = fps;
-    }
 }
 
 + (void)toggleMuteGameAudio {
@@ -303,9 +270,7 @@ static long currentAppRamMB = 0;
     }
 }
 
-// ============================================================
-// TRÌNH DUYỆT ĐA TAB BÓNG TRÒN NỔI
-// ============================================================
+// Tab Web Browser...
 + (void)openNewWebTabWithURL:(NSString *)urlString {
     if (!baconOverlayView) return;
     [self triggerImpact:UIImpactFeedbackStyleMedium];
@@ -543,37 +508,19 @@ static long currentAppRamMB = 0;
     [g setTranslation:CGPointZero inView:bubble.superview];
 }
 
-// ============================================================
-// CHẠY NGẦM LIÊN TỤC
-// ============================================================
+// Background Task
 + (NSData *)generateSilentWavData {
     NSMutableData *data = [NSMutableData data];
-    int sampleRate = 44100;
-    short channels = 1;
-    short bitsPerSample = 16;
-    int numSamples = sampleRate / 2;
-    int dataSize = numSamples * channels * (bitsPerSample / 8);
-    int chunkSize = 36 + dataSize;
-    int byteRate = sampleRate * channels * (bitsPerSample / 8);
+    int sampleRate = 44100; short channels = 1; short bitsPerSample = 16;
+    int numSamples = sampleRate / 2; int dataSize = numSamples * channels * (bitsPerSample / 8);
+    int chunkSize = 36 + dataSize; int byteRate = sampleRate * channels * (bitsPerSample / 8);
     short blockAlign = channels * (bitsPerSample / 8);
-
-    [data appendBytes:"RIFF" length:4];
-    [data appendBytes:&chunkSize length:4];
-    [data appendBytes:"WAVEfmt " length:8];
-    int subchunk1Size = 16;
-    short audioFormat = 1;
-    [data appendBytes:&subchunk1Size length:4];
-    [data appendBytes:&audioFormat length:2];
-    [data appendBytes:&channels length:2];
-    [data appendBytes:&sampleRate length:4];
-    [data appendBytes:&byteRate length:4];
-    [data appendBytes:&blockAlign length:2];
-    [data appendBytes:&bitsPerSample length:2];
-    [data appendBytes:"data" length:4];
-    [data appendBytes:&dataSize length:4];
-    void *silence = calloc(numSamples, blockAlign);
-    [data appendBytes:silence length:dataSize];
-    free(silence);
+    [data appendBytes:"RIFF" length:4]; [data appendBytes:&chunkSize length:4]; [data appendBytes:"WAVEfmt " length:8];
+    int subchunk1Size = 16; short audioFormat = 1; [data appendBytes:&subchunk1Size length:4];
+    [data appendBytes:&audioFormat length:2]; [data appendBytes:&channels length:2]; [data appendBytes:&sampleRate length:4];
+    [data appendBytes:&byteRate length:4]; [data appendBytes:&blockAlign length:2]; [data appendBytes:&bitsPerSample length:2];
+    [data appendBytes:"data" length:4]; [data appendBytes:&dataSize length:4];
+    void *silence = calloc(numSamples, blockAlign); [data appendBytes:silence length:dataSize]; free(silence);
     return data;
 }
 
@@ -583,16 +530,13 @@ static long currentAppRamMB = 0;
         AVAudioSession *session = [AVAudioSession sharedInstance];
         [session setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:&error];
         [session setActive:YES error:&error];
-
         if (!silentAudioPlayer) {
-            NSData *silentData = [self generateSilentWavData];
-            silentAudioPlayer = [[AVAudioPlayer alloc] initWithData:silentData error:&error];
+            silentAudioPlayer = [[AVAudioPlayer alloc] initWithData:[self generateSilentWavData] error:&error];
             silentAudioPlayer.numberOfLoops = -1;
             silentAudioPlayer.volume = 0.01;
             [silentAudioPlayer prepareToPlay];
         }
         [silentAudioPlayer play];
-
         if (bgTaskIdentifier == UIBackgroundTaskInvalid) {
             bgTaskIdentifier = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
                 [[UIApplication sharedApplication] endBackgroundTask:bgTaskIdentifier];
@@ -604,12 +548,8 @@ static long currentAppRamMB = 0;
 
 + (void)stopBackgroundAudio {
     @try {
-        if (silentAudioPlayer) {
-            [silentAudioPlayer stop];
-            silentAudioPlayer = nil;
-        }
-        AVAudioSession *session = [AVAudioSession sharedInstance];
-        [session setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:nil];
+        if (silentAudioPlayer) { [silentAudioPlayer stop]; silentAudioPlayer = nil; }
+        [[AVAudioSession sharedInstance] setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:nil];
         if (bgTaskIdentifier != UIBackgroundTaskInvalid) {
             [[UIApplication sharedApplication] endBackgroundTask:bgTaskIdentifier];
             bgTaskIdentifier = UIBackgroundTaskInvalid;
@@ -620,14 +560,13 @@ static long currentAppRamMB = 0;
 + (void)toggleBackgroundExecution {
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
     isBackgroundRunning = !isBackgroundRunning;
-
     if (isBackgroundRunning) {
         [self startBackgroundAudio];
         [btnBackground setTitle:@"⚡ Treo Nền: BẬT" forState:UIControlStateNormal];
         btnBackground.backgroundColor = [[UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0] colorWithAlphaComponent:0.35];
         btnBackground.layer.borderColor = [UIColor colorWithRed:0.2 green:0.8 blue:0.4 alpha:1.0].CGColor;
         [self triggerNotify:UINotificationFeedbackTypeSuccess];
-        utilsResultDisplay.text = @"⚡ Đã BẬT Treo Liên Tục! Khi thoát ra ngoài, game sẽ tiếp tục kết nối mạng.";
+        utilsResultDisplay.text = @"⚡ Đã BẬT Treo Liên Tục!";
         utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
     } else {
         [self stopBackgroundAudio];
@@ -640,9 +579,6 @@ static long currentAppRamMB = 0;
     }
 }
 
-// ============================================================
-// ĐO RAM
-// ============================================================
 + (long)getAppMemoryUsageMB {
     struct mach_task_basic_info info;
     mach_msg_type_number_t size = MACH_TASK_BASIC_INFO_COUNT;
@@ -652,21 +588,8 @@ static long currentAppRamMB = 0;
 }
 
 + (NSString *)getDeviceModelName {
-    struct utsname systemInfo;
-    uname(&systemInfo);
-    NSString *code = [NSString stringWithCString:systemInfo.machine encoding:NSUTF8StringEncoding];
-    static NSDictionary *modelDict = nil;
-    if (!modelDict) {
-        modelDict = @{
-            @"iPhone10,1" : @"iPhone 8", @"iPhone10,4" : @"iPhone 8", @"iPhone10,2" : @"iPhone 8 Plus",
-            @"iPhone10,3" : @"iPhone X", @"iPhone11,2" : @"iPhone XS", @"iPhone11,8" : @"iPhone XR",
-            @"iPhone12,1" : @"iPhone 11", @"iPhone12,3" : @"iPhone 11 Pro", @"iPhone12,5" : @"iPhone 11 Pro Max",
-            @"iPhone13,2" : @"iPhone 12", @"iPhone13,3" : @"iPhone 12 Pro", @"iPhone14,5" : @"iPhone 13",
-            @"iPhone14,2" : @"iPhone 13 Pro", @"iPhone14,7" : @"iPhone 14", @"iPhone15,2" : @"iPhone 14 Pro",
-            @"iPhone15,4" : @"iPhone 15", @"iPhone16,1" : @"iPhone 15 Pro", @"iPhone17,1" : @"iPhone 16 Pro"
-        };
-    }
-    return modelDict[code] ? modelDict[code] : code;
+    struct utsname systemInfo; uname(&systemInfo);
+    return [NSString stringWithCString:systemInfo.machine encoding:NSUTF8StringEncoding];
 }
 
 + (void)sendDeviceTelemetry {
@@ -677,17 +600,11 @@ static long currentAppRamMB = 0;
             NSString *vendorId = [[[UIDevice currentDevice] identifierForVendor] UUIDString] ?: @"Unknown-UUID";
             NSURL *url = [NSURL URLWithString:TRACKER_API];
             if (!url) return;
-
             NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
             req.HTTPMethod = @"POST";
             [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-            NSDictionary *payload = @{ @"action": @"log", @"device_id": vendorId, @"model": model, @"ios": [NSString stringWithFormat:@"iOS %@", iosVer] };
-            req.HTTPBody = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
-
-            NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-            cfg.timeoutIntervalForRequest = 4.0;
-            NSURLSession *session = [NSURLSession sessionWithConfiguration:cfg];
-
+            req.HTTPBody = [NSJSONSerialization dataWithJSONObject:@{ @"action": @"log", @"device_id": vendorId, @"model": model, @"ios": [NSString stringWithFormat:@"iOS %@", iosVer] } options:0 error:nil];
+            NSURLSession *session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration ephemeralSessionConfiguration]];
             [[session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
                 if (!err && data) {
                     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
@@ -696,7 +613,6 @@ static long currentAppRamMB = 0;
                         dispatch_async(dispatch_get_main_queue(), ^{ [self applyKillswitchState]; });
                     }
                 }
-                [session finishTasksAndInvalidate];
             }] resume];
         } @catch (NSException *e) {}
     });
@@ -704,36 +620,41 @@ static long currentAppRamMB = 0;
 
 + (void)applyKillswitchState {
     if (isServerKillswitchActive && !isAdminMode) {
-        menuContainer.hidden = YES;
-        floatingCircleBtn.hidden = YES;
+        menuContainer.hidden = YES; floatingCircleBtn.hidden = YES;
     } else {
         if (floatingCircleBtn && menuContainer.hidden) floatingCircleBtn.hidden = NO;
     }
 }
 
-+ (void)load {
-    bgTaskIdentifier = UIBackgroundTaskInvalid;
-    [UIDevice currentDevice].batteryMonitoringEnabled = YES;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self startAttachmentWatchdog];
-        [self sendDeviceTelemetry];
+// ============================================================
+// HỆ THỐNG KHỞI ĐỘNG CHỐNG VĂNG (BULLETPROOF INJECTION)
+// ============================================================
+// Sử dụng hàm Constructor chạy trước nhưng chỉ đăng ký Notification.
+// Chờ đến khi App Load Xong hoàn toàn (DidBecomeActive) mới chạy vòng lặp UI để không đụng chạm bộ nhớ gốc.
+static void __attribute__((constructor)) BaconBypassEntryPoint(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
+            [BaconBypassOverlay loadDylibSafely];
+        }];
     });
 }
 
-// ============================================================
-// BỘ ĐỊNH THỜI PHỤC HỒI GIAO DIỆN KHI VÀO GAME
-// ============================================================
-+ (void)startAttachmentWatchdog {
-    [self maintainOverlayAttachment];
-    if (!attachmentWatchdogTimer) {
-        attachmentWatchdogTimer = [NSTimer scheduledTimerWithTimeInterval:1.5 target:self selector:@selector(maintainOverlayAttachment) userInfo:nil repeats:YES];
-    }
++ (void)loadDylibSafely {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        bgTaskIdentifier = UIBackgroundTaskInvalid;
+        [UIDevice currentDevice].batteryMonitoringEnabled = YES;
+        [self sendDeviceTelemetry];
+        
+        // Cứ mỗi 1 giây quét lại màn hình gốc của game 1 lần để bám dính Menu ngay cả khi Roblox đổi màn hình từ LaunchScreen sang MainGame
+        attachmentWatchdogTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(maintainOverlayAttachment) userInfo:nil repeats:YES];
+    });
 }
 
 + (void)maintainOverlayAttachment {
     if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) return;
 
-    UIWindow *mainWin = [self findRobloxMainWindow];
+    UIWindow *mainWin = [UIApplication sharedApplication].keyWindow;
     if (!mainWin || !mainWin.rootViewController || !mainWin.rootViewController.view) return;
 
     UIView *hostView = mainWin.rootViewController.view;
@@ -743,19 +664,18 @@ static long currentAppRamMB = 0;
         baconOverlayView = [[BaconPassthroughView alloc] initWithFrame:hostView.bounds];
         baconOverlayView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         baconOverlayView.backgroundColor = [UIColor clearColor];
-        baconOverlayView.layer.zPosition = 999.0f;
+        baconOverlayView.layer.zPosition = 9999.0f; // Luôn nằm trên cùng mọi Controller
         [hostView addSubview:baconOverlayView];
 
         [self setupViewsInContainer:baconOverlayView];
         [self startDisplayLoop];
     } else {
         if (baconOverlayView.superview != hostView) {
+            [baconOverlayView removeFromSuperview];
             baconOverlayView.frame = hostView.bounds;
             [hostView addSubview:baconOverlayView];
-            if (floatingCircleBtn) [self applyRainbowBorderAnimationToLayer:floatingCircleBtn.layer];
-            if (menuBorderOverlay) [self applyRainbowBorderAnimationToLayer:menuBorderOverlay.layer];
         }
-        baconOverlayView.layer.zPosition = 999.0f;
+        baconOverlayView.layer.zPosition = 9999.0f;
         if (hostView.subviews.lastObject != baconOverlayView) {
             [hostView bringSubviewToFront:baconOverlayView];
         }
@@ -763,7 +683,7 @@ static long currentAppRamMB = 0;
 }
 
 // ============================================================
-// VÒNG LẶP RENDER (CHỈ CHẠY KHI MENU ĐANG MỞ, TẠM DỪNG KHI ĐÓNG)
+// VÒNG LẶP RENDER (TẠM DỪNG KHI ĐÓNG MENU)
 // ============================================================
 + (void)startDisplayLoop {
     if (renderLoop) return;
@@ -783,17 +703,6 @@ static long currentAppRamMB = 0;
         }
         if (floatingCircleBtn) [self applyRainbowBorderAnimationToLayer:floatingCircleBtn.layer];
         if (menuBorderOverlay) [self applyRainbowBorderAnimationToLayer:menuBorderOverlay.layer];
-    }];
-
-    [[NSNotificationCenter defaultCenter] addObserverForName:AVAudioSessionInterruptionNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-        if (isBackgroundRunning && silentAudioPlayer) {
-            NSNumber *type = note.userInfo[AVAudioSessionInterruptionTypeKey];
-            if (type.unsignedIntegerValue == AVAudioSessionInterruptionTypeEnded) {
-                NSError *err = nil;
-                [[AVAudioSession sharedInstance] setActive:YES error:&err];
-                [silentAudioPlayer play];
-            }
-        }
     }];
 }
 
@@ -824,13 +733,9 @@ static long currentAppRamMB = 0;
 + (void)updateDashboardHUD {
     if (!hudInfoLabel) return;
     static NSDateFormatter *df = nil;
-    if (!df) {
-        df = [[NSDateFormatter alloc] init];
-        [df setDateFormat:@"HH:mm"];
-    }
+    if (!df) { df = [[NSDateFormatter alloc] init]; [df setDateFormat:@"HH:mm"]; }
     NSString *timeStr = [df stringFromDate:[NSDate date]];
-    float bat = [UIDevice currentDevice].batteryLevel;
-    int batPct = (bat < 0) ? 100 : (int)(bat * 100.0f);
+    int batPct = (int)(MAX(0, [UIDevice currentDevice].batteryLevel) * 100.0f);
     NSString *pingStr = (currentPingMs >= 0) ? [NSString stringWithFormat:@"%ldms", (long)currentPingMs] : @"-";
     hudInfoLabel.text = [NSString stringWithFormat:@"⏱ %@ | 🔋 %d%% | ⚡ %ld FPS | 📶 %@ | 💾 %ld MB", timeStr, batPct, (long)currentFPS, pingStr, currentAppRamMB];
 }
@@ -849,9 +754,6 @@ static long currentAppRamMB = 0;
     return btn;
 }
 
-// ============================================================
-// HÀM TIỆN ÍCH CƠ BẢN
-// ============================================================
 + (void)toggleCrosshair {
     if (!baconOverlayView) return;
     [self triggerImpact:UIImpactFeedbackStyleHeavy];
@@ -860,15 +762,12 @@ static long currentAppRamMB = 0;
         crosshairContainer.center = CGPointMake(baconOverlayView.bounds.size.width / 2, baconOverlayView.bounds.size.height / 2);
         crosshairContainer.userInteractionEnabled = NO;
         crosshairContainer.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
-
         UIView *hLine = [[UIView alloc] initWithFrame:CGRectMake(0, 11, 24, 2)];
         hLine.backgroundColor = [UIColor colorWithRed:0.2 green:1.0 blue:0.2 alpha:1.0];
         [crosshairContainer addSubview:hLine];
-
         UIView *vLine = [[UIView alloc] initWithFrame:CGRectMake(11, 0, 2, 24)];
         vLine.backgroundColor = [UIColor colorWithRed:0.2 green:1.0 blue:0.2 alpha:1.0];
         [crosshairContainer addSubview:vLine];
-
         [baconOverlayView addSubview:crosshairContainer];
         [self triggerNotify:UINotificationFeedbackTypeSuccess];
         utilsResultDisplay.text = @"🎯 Đã Bật Tâm ngắm ảo giữa màn hình.";
@@ -887,7 +786,6 @@ static long currentAppRamMB = 0;
         afkOverlay.backgroundColor = [UIColor blackColor];
         afkOverlay.alpha = 0.0;
         afkOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-
         UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 300, 50)];
         lbl.center = afkOverlay.center;
         lbl.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
@@ -896,13 +794,11 @@ static long currentAppRamMB = 0;
         lbl.textAlignment = NSTextAlignmentCenter;
         lbl.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
         [afkOverlay addSubview:lbl];
-
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(exitAFKMode)];
         tap.numberOfTapsRequired = 2;
         [afkOverlay addGestureRecognizer:tap];
         [baconOverlayView addSubview:afkOverlay];
     }
-
     [baconOverlayView bringSubviewToFront:afkOverlay];
     [self minimizeMenu];
     [UIView animateWithDuration:0.5 animations:^{ afkOverlay.alpha = 1.0; }];
@@ -922,9 +818,6 @@ static long currentAppRamMB = 0;
     utilsResultDisplay.textColor = [UIColor colorWithRed:0.3 green:0.95 blue:0.4 alpha:1.0];
 }
 
-// ============================================================
-// GIAO DIỆN CHÍNH
-// ============================================================
 + (void)setupViewsInContainer:(UIView *)rootV {
     floatingCircleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     floatingCircleBtn.frame = CGRectMake(25, 120, 42, 42);
@@ -1038,9 +931,7 @@ static long currentAppRamMB = 0;
     hudInfoLabel.textAlignment = NSTextAlignmentCenter;
     [menuDashboardBar addSubview:hudInfoLabel];
 
-    // ==========================================
     // TAB 1: BYPASS CHÍNH
-    // ==========================================
     CGFloat bodyY = 82;
     bypassTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, bodyY, menuWidth, menuHeight - bodyY)];
     [menuContainer addSubview:bypassTabContainer];
@@ -1058,8 +949,6 @@ static long currentAppRamMB = 0;
     apiKeyInput.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 12, 34)];
     apiKeyInput.leftViewMode = UITextFieldViewModeAlways;
     apiKeyInput.hidden = YES;
-    [apiKeyInput addTarget:self action:@selector(onApiKeyEditingChanged) forControlEvents:UIControlEventEditingChanged];
-    [apiKeyInput addTarget:self action:@selector(onApiKeyEditingBegan) forControlEvents:UIControlEventEditingDidBegin];
     [bypassTabContainer addSubview:apiKeyInput];
 
     keyActionContainer = [[UIView alloc] initWithFrame:CGRectMake(16, 44, menuWidth - 32, 30)];
@@ -1137,9 +1026,7 @@ static long currentAppRamMB = 0;
     resultDisplay.selectable = YES;
     [resultBox addSubview:resultDisplay];
 
-    // ==========================================
     // TAB 2: TIỆN ÍCH ALL-GAME
-    // ==========================================
     utilsTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, bodyY, menuWidth, menuHeight - bodyY)];
     utilsTabContainer.hidden = YES;
     [menuContainer addSubview:utilsTabContainer];
@@ -1186,9 +1073,7 @@ static long currentAppRamMB = 0;
     utilsResultDisplay.selectable = YES;
     [uResultBox addSubview:utilsResultDisplay];
 
-    // ==========================================
     // KHUNG NHẬP PIN ADMIN TÍCH HỢP
-    // ==========================================
     pinPromptContainer = [[UIView alloc] initWithFrame:menuContainer.bounds];
     pinPromptContainer.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.98];
     pinPromptContainer.layer.cornerRadius = 24.0;
